@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NASCER — Sistema de Consultório Obstétrico</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Endereço da API em produção. Rodando localmente (frontend e backend na
+     mesma máquina), deixe como está — o app.js detecta sozinho. Ao publicar
+     o frontend separado do backend (ex: Cloudflare Pages + Render/Railway),
+     defina a URL completa do backend aqui, terminando em /api. Exemplo:
+     window.API_BASE_OVERRIDE = "https://nascer-obstetrico-api.onrender.com/api"; -->
+<script>
+  window.API_BASE_OVERRIDE = "";
+</script>
+
+<!-- React (via CDN, versões fixas e estáveis). app.js já vem pré-compilado
+     (sem JSX), então NÃO depende de Babel no navegador — carrega mais rápido
+     e não trava por causa de antivírus/firewall bloqueando o Babel. -->
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+<script src="app.js"></script>
+</body>
+</html>

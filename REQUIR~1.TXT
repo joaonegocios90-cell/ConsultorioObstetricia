@@ -1,0 +1,4 @@
+# Dependências opcionais — só são necessárias se o sistema for rodar com
+# Postgres (variável de ambiente DATABASE_URL definida, ex: Supabase).
+# Rodando localmente com SQLite (padrão), nada aqui precisa ser instalado.
+psycopg2-binary
