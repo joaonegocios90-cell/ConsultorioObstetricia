@@ -288,12 +288,23 @@ function GestantesListPage({ onOpenGestante, initialFiltro }) {
   const [search, setSearch] = useState("");
   const [filtro, setFiltro] = useState(initialFiltro || "todas");
   const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   const reload = useCallback(() => {
     api("/gestantes").then(setGestantes).catch((e) => setError(e.message));
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+
+  const handleDelete = async (g) => {
+    if (!window.confirm(`Excluir "${g.nome}"?\n\nIsso apaga também todo o histórico dela (consultas, exames, partos, vacinas etc.) e não pode ser desfeito.`)) return;
+    try {
+      await api(`/gestantes/${g.id}`, { method: "DELETE" });
+      reload();
+    } catch (e) {
+      alert("Erro ao excluir: " + e.message);
+    }
+  };
 
   if (error) return React.createElement(ApiErrorBanner, { error: error });
   if (!gestantes) return React.createElement("div", { className: "empty-state" }, "Carregando...");
@@ -309,12 +320,14 @@ function GestantesListPage({ onOpenGestante, initialFiltro }) {
   return (
     React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Gestantes"), React.createElement("div", { className: "sub" }, gestantes.length, " pacientes cadastradas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Nova gestante")), React.createElement("div", { className: "card" }, React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" } }, React.createElement("input", { className: "search-input", placeholder: "Buscar por nome...", value: search, onChange: (e) => setSearch(e.target.value) }), React.createElement("div", { className: "chip-select" }, [["todas", "Todas"], ["gestante", "Gestantes"], ["puerperio", "Puérperas"], ["risco", "Alto risco"]].map(([k, l]) => (
               React.createElement("div", { key: k, className: `chip ${filtro === k ? "active" : ""}`, onClick: () => setFiltro(k) }, l)
-            )))), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Paciente"), React.createElement("th", null, "IG"), React.createElement("th", null, "DPP"), React.createElement("th", null, "Convênio"), React.createElement("th", null, "Risco"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, filtered.map((g) => (
-              React.createElement("tr", { key: g.id, onClick: () => onOpenGestante(g.id) }, React.createElement("td", null, React.createElement("div", { className: "gestante-row" }, React.createElement("div", { className: "avatar-circle" }, initials(g.nome)), React.createElement("div", { className: "info" }, React.createElement("div", { className: "nome" }, g.nome), React.createElement("div", { className: "meta" }, g.telefone || "sem telefone")))), React.createElement("td", null, g.idade_gestacional ? g.idade_gestacional.texto : "—"), React.createElement("td", null, fmtDate(g.dpp)), React.createElement("td", null, g.convenio || "—"), React.createElement("td", null, g.alto_risco ? React.createElement("span", { className: "badge badge-danger" }, "Alto risco") : React.createElement("span", { className: "badge badge-ok" }, "Habitual")), React.createElement("td", { style: { textTransform: "capitalize" } }, React.createElement("span", { className: "badge badge-lavender" }, g.status)))
+            )))), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Paciente"), React.createElement("th", null, "IG"), React.createElement("th", null, "DPP"), React.createElement("th", null, "Convênio"), React.createElement("th", null, "Risco"), React.createElement("th", null, "Status"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, filtered.map((g) => (
+              React.createElement("tr", { key: g.id, onClick: () => onOpenGestante(g.id) }, React.createElement("td", null, React.createElement("div", { className: "gestante-row" }, React.createElement("div", { className: "avatar-circle" }, initials(g.nome)), React.createElement("div", { className: "info" }, React.createElement("div", { className: "nome" }, g.nome), React.createElement("div", { className: "meta" }, g.telefone || "sem telefone")))), React.createElement("td", null, g.idade_gestacional ? g.idade_gestacional.texto : "—"), React.createElement("td", null, fmtDate(g.dpp)), React.createElement("td", null, g.convenio || "—"), React.createElement("td", null, g.alto_risco ? React.createElement("span", { className: "badge badge-danger" }, "Alto risco") : React.createElement("span", { className: "badge badge-ok" }, "Habitual")), React.createElement("td", { style: { textTransform: "capitalize" } }, React.createElement("span", { className: "badge badge-lavender" }, g.status)), React.createElement("td", { onClick: (e) => e.stopPropagation() }, React.createElement("div", { style: { display: "flex", gap: 6, justifyContent: "flex-end" } }, React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Editar", onClick: () => setEditing(g) }, "✏️ Editar"), React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Excluir", style: { color: "var(--danger)" }, onClick: () => handleDelete(g) }, "✕ Excluir"))))
             )), filtered.length === 0 && (
-              React.createElement("tr", null, React.createElement("td", { colSpan: "6" }, React.createElement("div", { className: "empty-state" }, "Nenhuma gestante encontrada.")))
+              React.createElement("tr", null, React.createElement("td", { colSpan: "7" }, React.createElement("div", { className: "empty-state" }, "Nenhuma gestante encontrada.")))
             )))), showForm && (
         React.createElement(GestanteFormModal, { onClose: () => setShowForm(false), onSaved: (g) => { setShowForm(false); reload(); onOpenGestante(g.id); } })
+      ), editing && (
+        React.createElement(GestanteFormModal, { initial: editing, onClose: () => setEditing(null), onSaved: () => { setEditing(null); reload(); } })
       ))
   );
 }
