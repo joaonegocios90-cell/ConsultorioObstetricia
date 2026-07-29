@@ -12,6 +12,7 @@ Executar:
 Servidor sobe em http://localhost:8000
 """
 
+import base64
 import calendar
 import json
 import re
@@ -24,7 +25,7 @@ import urllib.error
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 import os
 
 # Por padrão o banco é um arquivo SQLite na pasta do projeto — funciona sem
@@ -83,6 +84,22 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 #   3. Copie o "Access Token" (use o de TESTE primeiro, depois o de producao)
 #      set MERCADOPAGO_ACCESS_TOKEN=TEST-xxxxxxxx...
 MERCADOPAGO_ACCESS_TOKEN = os.environ.get("MERCADOPAGO_ACCESS_TOKEN", "")
+
+# WhatsApp via Twilio (mensagem de boas-vindas no cadastro e confirmacao apos
+# pagamento):
+#   1. Crie uma conta em https://www.twilio.com e ative o WhatsApp (sandbox
+#      para testar de graca, ou um numero aprovado para producao).
+#   2. Em Twilio Console > Account Info, copie o "Account SID" e "Auth Token".
+#   3. TWILIO_WHATSAPP_FROM e o numero do remetente no formato E.164, ex:
+#      "+14155238886" (numero padrao do sandbox de testes do Twilio).
+#      set TWILIO_ACCOUNT_SID=ACxxxxxxxx...
+#      set TWILIO_AUTH_TOKEN=xxxxxxxx...
+#      set TWILIO_WHATSAPP_FROM=+14155238886
+# Sem essas variaveis configuradas, as mensagens NAO sao enviadas de verdade -
+# ficam apenas registradas no log do servidor (modo demonstracao).
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_WHATSAPP_FROM = os.environ.get("TWILIO_WHATSAPP_FROM", "")
 
 # URL publica do backend/frontend, usada nos links dos e-mails e no retorno do
 # checkout do Mercado Pago. Em producao, troque para o dominio real.
@@ -523,6 +540,79 @@ def send_email(destinatario, assunto, corpo_html, tipo="geral"):
     return enviado
 
 
+def _formatar_whatsapp_br(telefone):
+    """Converte um telefone brasileiro em qualquer formato (ex: '(11) 98765-4321')
+    para E.164 (+5511987654321), formato exigido pela API do WhatsApp/Twilio."""
+    if not telefone:
+        return None
+    digitos = re.sub(r"\D", "", telefone)
+    if not digitos:
+        return None
+    if digitos.startswith("55") and len(digitos) >= 12:
+        return f"+{digitos}"
+    return f"+55{digitos}"
+
+
+def enviar_whatsapp(telefone, mensagem):
+    """Envia uma mensagem de WhatsApp via Twilio se as credenciais estiverem
+    configuradas (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_WHATSAPP_FROM).
+    Sem elas, so registra no log do servidor (modo demonstracao) - nao trava
+    o restante da requisicao se falhar."""
+    numero = _formatar_whatsapp_br(telefone)
+    if not numero:
+        return False
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM):
+        print(f"[whatsapp] (modo demo, sem credenciais Twilio configuradas) Seria enviado para {numero}:\n{mensagem}")
+        return False
+    payload = urlencode({
+        "From": f"whatsapp:{TWILIO_WHATSAPP_FROM}",
+        "To": f"whatsapp:{numero}",
+        "Body": mensagem,
+    }).encode("utf-8")
+    auth = base64.b64encode(f"{TWILIO_ACCOUNT_SID}:{TWILIO_AUTH_TOKEN}".encode("utf-8")).decode("ascii")
+    req = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Basic {auth}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+        return True
+    except urllib.error.HTTPError as e:
+        detalhe = e.read().decode("utf-8", errors="ignore")
+        print(f"[whatsapp] Twilio recusou o envio para {numero}: {detalhe}")
+        return False
+    except urllib.error.URLError as e:
+        print(f"[whatsapp] Falha de conexao ao enviar WhatsApp para {numero}: {e}")
+        return False
+
+
+def msg_boas_vindas_whatsapp(nome):
+    primeiro_nome = (nome or "").split(" ")[0] or "tudo bem"
+    return (
+        f"Olá, {primeiro_nome}! 🤰 Seja bem-vinda ao {CLINICA_NOME}.\n\n"
+        f"Seu cadastro foi realizado com sucesso com {CLINICA_PROFISSIONAL} ({CLINICA_CARGO}).\n"
+        f"Qualquer dúvida, estamos por aqui mesmo pelo WhatsApp.\n\n"
+        f"{CLINICA_ENDERECO}"
+    )
+
+
+def msg_pagamento_confirmado_whatsapp(nome, tipo_evento, valor, data_hora):
+    primeiro_nome = (nome or "").split(" ")[0] or ""
+    valor_fmt = f"R$ {valor:.2f}".replace(".", ",") if valor else "—"
+    return (
+        f"✅ Pagamento confirmado, {primeiro_nome}!\n\n"
+        f"Recebemos o pagamento de {valor_fmt} referente ao(à) seu(sua) "
+        f"{tipo_evento or 'atendimento'} em {fmtar_data_hora(data_hora)}.\n\n"
+        f"Até lá! — {CLINICA_NOME}"
+    )
+
+
 def _tpl_rodape():
     return f"""
     <hr style="border:none;border-top:1px solid #eee;margin:20px 0 12px;">
@@ -751,6 +841,8 @@ def _criar_gestante(conn, body, enviar_verificacao=True):
     row = conn.execute("SELECT * FROM gestantes WHERE id=?", (new_id,)).fetchone()
     if email and enviar_verificacao:
         send_email(email, "Confirme seu cadastro", tpl_verificacao(body.get("nome", ""), verify_token), tipo="verificacao")
+    if body.get("telefone"):
+        enviar_whatsapp(body.get("telefone"), msg_boas_vindas_whatsapp(body.get("nome", "")))
     return row
 
 
@@ -1446,12 +1538,17 @@ def _processar_webhook_pagamento(body, query):
         conn.execute("UPDATE agenda_eventos SET status_pagamento='pago' WHERE id=?", (evento_id,))
         conn.commit()
         if evento["gestante_id"]:
-            g = conn.execute("SELECT nome, email FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
+            g = conn.execute("SELECT nome, email, telefone FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
             if g and g["email"]:
                 send_email(
                     g["email"], "Pagamento confirmado",
                     tpl_pagamento_confirmado(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                     tipo="pagamento_confirmado",
+                )
+            if g and g["telefone"]:
+                enviar_whatsapp(
+                    g["telefone"],
+                    msg_pagamento_confirmado_whatsapp(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                 )
     conn.close()
     return 200, {"ok": True}
@@ -1469,12 +1566,17 @@ def marcar_pago_manual(handler, params, body, query):
     conn.execute("UPDATE agenda_eventos SET status_pagamento='pago' WHERE id=?", (params["id"],))
     conn.commit()
     if evento["gestante_id"]:
-        g = conn.execute("SELECT nome, email FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
+        g = conn.execute("SELECT nome, email, telefone FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
         if g and g["email"]:
             send_email(
                 g["email"], "Pagamento confirmado",
                 tpl_pagamento_confirmado(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                 tipo="pagamento_confirmado",
+            )
+        if g and g["telefone"]:
+            enviar_whatsapp(
+                g["telefone"],
+                msg_pagamento_confirmado_whatsapp(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
             )
     row = conn.execute("SELECT * FROM agenda_eventos WHERE id=?", (params["id"],)).fetchone()
     conn.close()
