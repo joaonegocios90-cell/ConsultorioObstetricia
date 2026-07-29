@@ -171,9 +171,9 @@ function StatusBadge({ status }) {
 // Componentes reutilizáveis
 // ============================================================================
 
-function StatCard({ icon, label, value, color }) {
+function StatCard({ icon, label, value, color, onClick }) {
   return (
-    React.createElement("div", { className: "card stat-card" }, React.createElement("div", { className: "icon-badge", style: { background: color + "22", color: color } }, icon), React.createElement("div", { className: "label" }, label), React.createElement("div", { className: "value" }, value))
+    React.createElement("div", { className: `card stat-card${onClick ? " clickable" : ""}`, onClick: onClick, title: onClick ? "Clique para ver detalhes" : undefined }, React.createElement("div", { className: "icon-badge", style: { background: color + "22", color: color } }, icon), React.createElement("div", { className: "label" }, label), React.createElement("div", { className: "value" }, value))
   );
 }
 
@@ -250,7 +250,7 @@ function Sidebar({ page, onNavigate }) {
 // Dashboard
 // ============================================================================
 
-function DashboardPage({ onOpenGestante }) {
+function DashboardPage({ onOpenGestante, onNavigateGestantes, onNavigate }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
@@ -262,7 +262,7 @@ function DashboardPage({ onOpenGestante }) {
   if (!data) return React.createElement("div", { className: "empty-state" }, "Carregando indicadores...");
 
   return (
-    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Dashboard"), React.createElement("div", { className: "sub" }, "Visão geral do consultório — ", new Date().toLocaleDateString("pt-BR")))), React.createElement("div", { className: "grid grid-4", style: { marginBottom: 18 } }, React.createElement(StatCard, { icon: "🤰", label: "Gestantes ativas", value: data.gestantes_cadastradas, color: "#c2185b" }), React.createElement(StatCard, { icon: "👶", label: "Puérperas", value: data.puerperas, color: "#7e57c2" }), React.createElement(StatCard, { icon: "⚠️", label: "Alto risco", value: data.gestantes_alto_risco, color: "#d32f2f" }), React.createElement(StatCard, { icon: "🩺", label: "Consultas realizadas", value: data.consultas_realizadas, color: "#00796b" })), React.createElement("div", { className: "grid grid-4", style: { marginBottom: 24 } }, React.createElement(StatCard, { icon: "👣", label: "Partos normais (mês)", value: data.partos_normais_mes, color: "#2e7d32" }), React.createElement(StatCard, { icon: "🔪", label: "Cesáreas (mês)", value: data.cesareas_mes, color: "#ef6c00" }), React.createElement(StatCard, { icon: "🧪", label: "Exames pendentes", value: data.exames_pendentes, color: "#ef6c00" }), React.createElement(StatCard, { icon: "💉", label: "Vacinas pendentes", value: data.vacinas_pendentes, color: "#ef6c00" })), React.createElement("div", { className: "grid grid-2" }, React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Consultas de hoje"), data.consultas_hoje.length === 0 && React.createElement("div", { className: "empty-state" }, "Nenhuma consulta agendada para hoje."), data.consultas_hoje.map((c) => (
+    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Dashboard"), React.createElement("div", { className: "sub" }, "Visão geral do consultório — ", new Date().toLocaleDateString("pt-BR")))), React.createElement("div", { className: "grid grid-4", style: { marginBottom: 18 } }, React.createElement(StatCard, { icon: "🤰", label: "Gestantes ativas", value: data.gestantes_cadastradas, color: "#c2185b", onClick: () => onNavigateGestantes("gestante") }), React.createElement(StatCard, { icon: "👶", label: "Puérperas", value: data.puerperas, color: "#7e57c2", onClick: () => onNavigateGestantes("puerperio") }), React.createElement(StatCard, { icon: "⚠️", label: "Alto risco", value: data.gestantes_alto_risco, color: "#d32f2f", onClick: () => onNavigateGestantes("risco") }), React.createElement(StatCard, { icon: "🩺", label: "Consultas realizadas", value: data.consultas_realizadas, color: "#00796b", onClick: () => onNavigate("agenda") })), React.createElement("div", { className: "grid grid-4", style: { marginBottom: 24 } }, React.createElement(StatCard, { icon: "👣", label: "Partos normais (mês)", value: data.partos_normais_mes, color: "#2e7d32", onClick: () => onNavigate("relatorios") }), React.createElement(StatCard, { icon: "🔪", label: "Cesáreas (mês)", value: data.cesareas_mes, color: "#ef6c00", onClick: () => onNavigate("relatorios") }), React.createElement(StatCard, { icon: "🧪", label: "Exames pendentes", value: data.exames_pendentes, color: "#ef6c00", onClick: () => onNavigateGestantes("todas") }), React.createElement(StatCard, { icon: "💉", label: "Vacinas pendentes", value: data.vacinas_pendentes, color: "#ef6c00", onClick: () => onNavigateGestantes("todas") })), React.createElement("div", { className: "grid grid-2" }, React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Consultas de hoje"), data.consultas_hoje.length === 0 && React.createElement("div", { className: "empty-state" }, "Nenhuma consulta agendada para hoje."), data.consultas_hoje.map((c) => (
             React.createElement("div", { key: c.id, className: "gestante-card", onClick: () => c.gestante_id && onOpenGestante(c.gestante_id) }, React.createElement("div", { className: "gestante-row" }, React.createElement("div", { className: "avatar-circle" }, initials(c.gestante_nome)), React.createElement("div", { className: "info" }, React.createElement("div", { className: "nome" }, c.gestante_nome || "Sem paciente vinculada"), React.createElement("div", { className: "meta" }, fmtDateTime(c.data_hora), " · ", c.observacoes))), React.createElement(StatusBadge, { status: c.status }))
           ))), React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Gestantes de alto risco"), data.gestantes_alto_risco_lista.length === 0 && React.createElement("div", { className: "empty-state" }, "Nenhuma gestante de alto risco no momento."), data.gestantes_alto_risco_lista.map((g) => (
             React.createElement("div", { key: g.id, className: "gestante-card", onClick: () => onOpenGestante(g.id) }, React.createElement("div", { className: "gestante-row" }, React.createElement("div", { className: "avatar-circle" }, initials(g.nome)), React.createElement("div", { className: "info" }, React.createElement("div", { className: "nome" }, g.nome), React.createElement("div", { className: "meta" }, g.condicoes_risco.map((c) => React.createElement("span", { key: c, className: "risk-tag" }, riskLabel(c)))))))
@@ -282,11 +282,11 @@ function ApiErrorBanner({ error }) {
 // Gestantes — lista
 // ============================================================================
 
-function GestantesListPage({ onOpenGestante }) {
+function GestantesListPage({ onOpenGestante, initialFiltro }) {
   const [gestantes, setGestantes] = useState(null);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
-  const [filtro, setFiltro] = useState("todas");
+  const [filtro, setFiltro] = useState(initialFiltro || "todas");
   const [showForm, setShowForm] = useState(false);
 
   const reload = useCallback(() => {
@@ -1304,12 +1304,14 @@ function RelatoriosPage() {
 function App() {
   const [page, setPage] = useState("dashboard");
   const [gestanteId, setGestanteId] = useState(null);
+  const [gestantesFiltroInicial, setGestantesFiltroInicial] = useState(null);
 
-  const navigate = (p) => { setPage(p); setGestanteId(null); };
+  const navigate = (p) => { setPage(p); setGestanteId(null); setGestantesFiltroInicial(null); };
   const openGestante = (id) => { setGestanteId(id); setPage("gestante-detail"); };
+  const navigateGestantes = (filtro) => { setGestantesFiltroInicial(filtro); setGestanteId(null); setPage("gestantes"); };
 
   return (
-    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "sobre" && React.createElement(SobrePage, null)))
+    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "sobre" && React.createElement(SobrePage, null)))
   );
 }
 

@@ -172,6 +172,14 @@ a { color: var(--rose); text-decoration: none; }
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; margin-bottom: 6px;
 }
+.stat-card.clickable {
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.15s;
+}
+.stat-card.clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
 
 .section-title {
   font-size: 15px;
