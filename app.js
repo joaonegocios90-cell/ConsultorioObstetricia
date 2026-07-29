@@ -1,4 +1,4 @@
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ============================================================================
 // Configuração / constantes
@@ -183,6 +183,37 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
+function EnderecoInput({ value, onChange }) {
+  // Campo de endereço com autocomplete do Google Maps (Places API), quando o
+  // script do Maps estiver carregado (ver index.html). Sem a chave/script,
+  // funciona como um input de texto comum.
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (!window.google || !window.google.maps || !window.google.maps.places || !inputRef.current) return;
+    const autocomplete = new window.google.maps.places.Autocomplete(inputRef.current, {
+      types: ["address"],
+      componentRestrictions: { country: "br" },
+      fields: ["formatted_address"],
+    });
+    const listener = autocomplete.addListener("place_changed", () => {
+      const place = autocomplete.getPlace();
+      if (place && place.formatted_address) onChange(place.formatted_address);
+    });
+    return () => {
+      if (window.google && window.google.maps && window.google.maps.event) {
+        window.google.maps.event.removeListener(listener);
+      }
+    };
+  }, []);
+  return React.createElement("input", {
+    ref: inputRef,
+    value: value || "",
+    onChange: (e) => onChange(e.target.value),
+    placeholder: "Comece a digitar o endereço...",
+    autoComplete: "off",
+  });
+}
+
 function Field({ label, children, full }) {
   return (
     React.createElement("div", { className: `form-field ${full ? "full" : ""}` }, React.createElement("label", null, label), children)
@@ -365,7 +396,7 @@ function GestanteFormModal({ onClose, onSaved, initial }) {
   };
 
   return (
-    React.createElement(Modal, { title: initial ? "Editar gestante" : "Cadastro da gestante", onClose: onClose, wide: true }, err && React.createElement("div", { className: "alert-banner" }, err), React.createElement("div", { className: "form-grid" }, React.createElement(Field, { label: "Nome completo", full: true }, React.createElement("input", { value: form.nome, onChange: (e) => set("nome", e.target.value) })), React.createElement(Field, { label: "Data de nascimento" }, React.createElement("input", { type: "date", value: form.data_nascimento || "", onChange: (e) => set("data_nascimento", e.target.value) })), React.createElement(Field, { label: "CPF" }, React.createElement("input", { value: form.cpf || "", onChange: (e) => set("cpf", e.target.value), placeholder: "000.000.000-00" })), React.createElement(Field, { label: "Telefone" }, React.createElement("input", { value: form.telefone || "", onChange: (e) => set("telefone", e.target.value), placeholder: "(00) 00000-0000" })), React.createElement(Field, { label: "E-mail" }, React.createElement("input", { type: "email", value: form.email || "", onChange: (e) => set("email", e.target.value), placeholder: "paciente@email.com" })), React.createElement(Field, { label: "Convênio / SUS" }, React.createElement("input", { value: form.convenio || "", onChange: (e) => set("convenio", e.target.value) })), React.createElement(Field, { label: "Endereço", full: true }, React.createElement("input", { value: form.endereco || "", onChange: (e) => set("endereco", e.target.value) })), React.createElement(Field, { label: "Tipo sanguíneo" }, React.createElement("input", { value: form.tipo_sanguineo || "", onChange: (e) => set("tipo_sanguineo", e.target.value), placeholder: "ex: O+" })), React.createElement(Field, { label: "DUM (data última menstruação)" }, React.createElement("input", { type: "date", value: form.dum || "", onChange: (e) => set("dum", e.target.value) }))), form.dum && (
+    React.createElement(Modal, { title: initial ? "Editar gestante" : "Cadastro da gestante", onClose: onClose, wide: true }, err && React.createElement("div", { className: "alert-banner" }, err), React.createElement("div", { className: "form-grid" }, React.createElement(Field, { label: "Nome completo", full: true }, React.createElement("input", { value: form.nome, onChange: (e) => set("nome", e.target.value) })), React.createElement(Field, { label: "Data de nascimento" }, React.createElement("input", { type: "date", value: form.data_nascimento || "", onChange: (e) => set("data_nascimento", e.target.value) })), React.createElement(Field, { label: "CPF" }, React.createElement("input", { value: form.cpf || "", onChange: (e) => set("cpf", e.target.value), placeholder: "000.000.000-00" })), React.createElement(Field, { label: "Telefone" }, React.createElement("input", { value: form.telefone || "", onChange: (e) => set("telefone", e.target.value), placeholder: "(00) 00000-0000" })), React.createElement(Field, { label: "E-mail" }, React.createElement("input", { type: "email", value: form.email || "", onChange: (e) => set("email", e.target.value), placeholder: "paciente@email.com" })), React.createElement(Field, { label: "Convênio / SUS" }, React.createElement("input", { value: form.convenio || "", onChange: (e) => set("convenio", e.target.value) })), React.createElement(Field, { label: "Endereço", full: true }, React.createElement(EnderecoInput, { value: form.endereco, onChange: (v) => set("endereco", v) })), React.createElement(Field, { label: "Tipo sanguíneo" }, React.createElement("input", { value: form.tipo_sanguineo || "", onChange: (e) => set("tipo_sanguineo", e.target.value), placeholder: "ex: O+" })), React.createElement(Field, { label: "DUM (data última menstruação)" }, React.createElement("input", { type: "date", value: form.dum || "", onChange: (e) => set("dum", e.target.value) }))), form.dum && (
         React.createElement("div", { className: "badge badge-lavender", style: { marginTop: 10 } }, "IG estimada:", ig ? ig.texto : "—", " · DPP (Naegele): ", fmtDate(dpp))
       ), React.createElement("h4", { style: { margin: "18px 0 8px" } }, "Dados complementares"), React.createElement("div", { className: "form-grid cols-3" }, React.createElement(Field, { label: "Estado civil" }, React.createElement("input", { value: form.estado_civil || "", onChange: (e) => set("estado_civil", e.target.value) })), React.createElement(Field, { label: "Profissão" }, React.createElement("input", { value: form.profissao || "", onChange: (e) => set("profissao", e.target.value) })), React.createElement(Field, { label: "Altura (m)" }, React.createElement("input", { type: "number", step: "0.01", value: form.altura || "", onChange: (e) => set("altura", e.target.value), placeholder: "ex: 1.65" })), React.createElement(Field, { label: "Filhos vivos" }, React.createElement("input", { type: "number", min: "0", value: form.filhos_vivos, onChange: (e) => set("filhos_vivos", +e.target.value) })), React.createElement(Field, { label: "Pessoa de referência" }, React.createElement("input", { value: form.pessoa_referencia || "", onChange: (e) => set("pessoa_referencia", e.target.value) })), React.createElement(Field, { label: "Telefone de referência" }, React.createElement("input", { value: form.telefone_referencia || "", onChange: (e) => set("telefone_referencia", e.target.value) }))), React.createElement("h4", { style: { margin: "18px 0 8px" } }, "Histórico obstétrico"), React.createElement("div", { className: "form-grid cols-3" }, React.createElement(Field, { label: "Nº de gestações" }, React.createElement("input", { type: "number", min: "0", value: form.num_gestacoes, onChange: (e) => set("num_gestacoes", +e.target.value) })), React.createElement(Field, { label: "Partos normais" }, React.createElement("input", { type: "number", min: "0", value: form.num_partos_normais, onChange: (e) => set("num_partos_normais", +e.target.value) })), React.createElement(Field, { label: "Cesarianas" }, React.createElement("input", { type: "number", min: "0", value: form.num_cesareas, onChange: (e) => set("num_cesareas", +e.target.value) })), React.createElement(Field, { label: "Abortos" }, React.createElement("input", { type: "number", min: "0", value: form.num_abortos, onChange: (e) => set("num_abortos", +e.target.value) }))), React.createElement("h4", { style: { margin: "18px 0 8px" } }, "Histórico médico"), React.createElement("div", { className: "form-grid" }, React.createElement(Field, { label: "Alergias" }, React.createElement("input", { value: form.alergias || "", onChange: (e) => set("alergias", e.target.value) })), React.createElement(Field, { label: "Doenças pré-existentes" }, React.createElement("input", { value: form.doencas_preexistentes || "", onChange: (e) => set("doencas_preexistentes", e.target.value) })), React.createElement(Field, { label: "Medicamentos em uso", full: true }, React.createElement("input", { value: form.medicamentos_uso || "", onChange: (e) => set("medicamentos_uso", e.target.value) }))), React.createElement("h4", { style: { margin: "18px 0 8px" } }, "Condições de risco gestacional"), React.createElement(RiskPills, { value: form.condicoes_risco || [], onChange: (v) => set("condicoes_risco", v) }), React.createElement("div", { className: "modal-actions" }, React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancelar"), React.createElement("button", { className: "btn btn-primary", onClick: submit, disabled: saving }, saving ? "Salvando..." : "Salvar")))
   );
@@ -419,7 +450,7 @@ function CadastroPage({ onSaved, onCancel }) {
           React.createElement(Field, { label: "Telefone" }, React.createElement("input", { value: form.telefone || "", onChange: (e) => set("telefone", e.target.value), placeholder: "(00) 00000-0000" })),
           React.createElement(Field, { label: "E-mail" }, React.createElement("input", { type: "email", value: form.email || "", onChange: (e) => set("email", e.target.value), placeholder: "paciente@email.com" })),
           React.createElement(Field, { label: "Convênio / SUS" }, React.createElement("input", { value: form.convenio || "", onChange: (e) => set("convenio", e.target.value) })),
-          React.createElement(Field, { label: "Endereço", full: true }, React.createElement("input", { value: form.endereco || "", onChange: (e) => set("endereco", e.target.value) })),
+          React.createElement(Field, { label: "Endereço", full: true }, React.createElement(EnderecoInput, { value: form.endereco, onChange: (v) => set("endereco", v) })),
           React.createElement(Field, { label: "Tipo sanguíneo" }, React.createElement("input", { value: form.tipo_sanguineo || "", onChange: (e) => set("tipo_sanguineo", e.target.value), placeholder: "ex: O+" })),
           React.createElement(Field, { label: "DUM (data última menstruação)" }, React.createElement("input", { type: "date", value: form.dum || "", onChange: (e) => set("dum", e.target.value) }))
         ),
@@ -949,6 +980,7 @@ function AgendaPage() {
   const [showForm, setShowForm] = useState(false);
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [pagando, setPagando] = useState(null);
+  const [editingEvento, setEditingEvento] = useState(null);
 
   const reload = useCallback(() => {
     Promise.all([api("/agenda"), api("/gestantes")])
@@ -989,6 +1021,20 @@ function AgendaPage() {
     reload();
   };
 
+  const handleDeleteEvento = async (ev) => {
+    if (!window.confirm(`Excluir este evento (${ev.tipo || "evento"} — ${ev.gestante_nome || "sem paciente"})?\n\nNão pode ser desfeito.`)) return;
+    try {
+      await api(`/agenda/${ev.id}`, { method: "DELETE" });
+      reload();
+    } catch (e) {
+      alert("Erro ao excluir: " + e.message);
+    }
+  };
+
+  const AcoesEventoCell = ({ e }) => (
+    React.createElement("div", { style: { display: "flex", gap: 6 } }, React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Editar", onClick: () => setEditingEvento(e) }, "✏️ Editar"), React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Excluir", style: { color: "var(--danger)" }, onClick: () => handleDeleteEvento(e) }, "✕ Excluir"))
+  );
+
   const ValorCell = ({ e }) => {
     if (!e.valor) return React.createElement("span", { style: { color: "var(--ink-soft)" } }, "—");
     return (
@@ -1001,21 +1047,29 @@ function AgendaPage() {
   return (
     React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Agenda obstétrica"), React.createElement("div", { className: "sub" }, "Consultas, ultrassons, exames, retornos e vacinas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Novo evento")), React.createElement("div", { className: "chip-select", style: { marginBottom: 16 } }, React.createElement("div", { className: `chip ${filtroTipo === "todos" ? "active" : ""}`, onClick: () => setFiltroTipo("todos") }, "Todos"), AGENDA_TIPOS.map((t) => (
           React.createElement("div", { key: t.key, className: `chip ${filtroTipo === t.key ? "active" : ""}`, onClick: () => setFiltroTipo(t.key) }, t.label)
-        ))), React.createElement("div", { className: "card", style: { marginBottom: 16 } }, React.createElement("div", { className: "section-title" }, "Próximos eventos (", futuros.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"), React.createElement("th", null))), React.createElement("tbody", null, futuros.map((e) => (
-              React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })), React.createElement("td", null, e.status === "agendado" && (
+        ))), React.createElement("div", { className: "card", style: { marginBottom: 16 } }, React.createElement("div", { className: "section-title" }, "Próximos eventos (", futuros.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, futuros.map((e) => (
+              React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })), React.createElement("td", null, React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, e.status === "agendado" && (
                     React.createElement("div", { style: { display: "flex", gap: 6 } }, React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => updateStatus(e, "confirmado") }, "Confirmar"), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => updateStatus(e, "cancelado") }, "Cancelar"))
-                  )))
-            )), futuros.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "7" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento futuro.")))))), React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Eventos anteriores (", passados.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"))), React.createElement("tbody", null, passados.slice(0, 20).map((e) => (
-              React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })))
-            )), passados.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "6" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento anterior.")))))), showForm && (
+                  ), React.createElement(AcoesEventoCell, { e: e }))))
+            )), futuros.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "8" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento futuro.")))))), React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Eventos anteriores (", passados.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, passados.slice(0, 20).map((e) => (
+              React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })), React.createElement("td", null, React.createElement(AcoesEventoCell, { e: e })))
+            )), passados.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "7" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento anterior.")))))), showForm && (
         React.createElement(AgendaFormModal, { gestantes: gestantes, onClose: () => setShowForm(false), onSaved: () => { setShowForm(false); reload(); } })
+      ), editingEvento && (
+        React.createElement(AgendaFormModal, { gestantes: gestantes, initial: editingEvento, onClose: () => setEditingEvento(null), onSaved: () => { setEditingEvento(null); reload(); } })
       ))
   );
 }
 
-function AgendaFormModal({ gestantes, onClose, onSaved, dataInicial }) {
+function AgendaFormModal({ gestantes, onClose, onSaved, dataInicial, initial }) {
   const [modoPaciente, setModoPaciente] = useState("existente");
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(initial ? {
+    gestante_id: initial.gestante_id || "",
+    tipo: initial.tipo || "consulta",
+    data_hora: (initial.data_hora || "").slice(0, 16),
+    observacoes: initial.observacoes || "",
+    valor: initial.valor != null ? initial.valor : "",
+  } : {
     gestante_id: "", tipo: "consulta",
     data_hora: dataInicial ? `${dataInicial}T09:00` : "",
     observacoes: "", valor: "",
@@ -1027,29 +1081,44 @@ function AgendaFormModal({ gestantes, onClose, onSaved, dataInicial }) {
   const setNova = (k, v) => setNovaPaciente((f) => ({ ...f, [k]: v }));
   const submit = async () => {
     setErro("");
-    if (modoPaciente === "nova" && !novaPaciente.nome.trim()) {
+    if (!initial && modoPaciente === "nova" && !novaPaciente.nome.trim()) {
       setErro("Informe o nome da nova paciente.");
       return;
     }
     setSaving(true);
     try {
-      const payload = {
-        ...form,
-        gestante_id: modoPaciente === "existente" ? (form.gestante_id || null) : null,
-        valor: form.valor ? parseFloat(form.valor) : null,
-      };
-      if (modoPaciente === "nova") {
-        payload.nova_paciente = novaPaciente;
+      if (initial) {
+        await api(`/agenda/${initial.id}`, {
+          method: "PUT",
+          body: {
+            gestante_id: form.gestante_id || null,
+            tipo: form.tipo,
+            data_hora: form.data_hora,
+            observacoes: form.observacoes,
+            valor: form.valor ? parseFloat(form.valor) : null,
+          },
+        });
+      } else {
+        const payload = {
+          ...form,
+          gestante_id: modoPaciente === "existente" ? (form.gestante_id || null) : null,
+          valor: form.valor ? parseFloat(form.valor) : null,
+        };
+        if (modoPaciente === "nova") {
+          payload.nova_paciente = novaPaciente;
+        }
+        await api("/agenda", { method: "POST", body: payload });
       }
-      await api("/agenda", { method: "POST", body: payload });
       onSaved();
+    } catch (e) {
+      setErro(e.message);
     } finally { setSaving(false); }
   };
   return (
-    React.createElement(Modal, { title: "Novo evento na agenda", onClose: onClose }, React.createElement("div", { className: "form-grid" }, React.createElement(Field, { label: "Paciente", full: true }, React.createElement("div", { className: "paciente-toggle", style: { display: "flex", gap: 8, marginBottom: 8 } }, React.createElement("button", { type: "button", className: modoPaciente === "existente" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => setModoPaciente("existente") }, "Paciente já cadastrada"), React.createElement("button", { type: "button", className: modoPaciente === "nova" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => setModoPaciente("nova") }, "Cadastrar novo paciente")), modoPaciente === "existente" ? (
+    React.createElement(Modal, { title: initial ? "Editar evento" : "Novo evento na agenda", onClose: onClose }, React.createElement("div", { className: "form-grid" }, React.createElement(Field, { label: "Paciente", full: true }, !initial && React.createElement("div", { className: "paciente-toggle", style: { display: "flex", gap: 8, marginBottom: 8 } }, React.createElement("button", { type: "button", className: modoPaciente === "existente" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => setModoPaciente("existente") }, "Paciente já cadastrada"), React.createElement("button", { type: "button", className: modoPaciente === "nova" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => setModoPaciente("nova") }, "Cadastrar novo paciente")), (initial || modoPaciente === "existente") ? (
             React.createElement("select", { value: form.gestante_id, onChange: (e) => set("gestante_id", e.target.value) }, React.createElement("option", { value: "" }, "Sem paciente vinculada"), gestantes.map((g) => React.createElement("option", { key: g.id, value: g.id }, g.nome)))
           ) : (
-            React.createElement("div", { className: "nova-paciente-box", style: { border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: 10, display: "grid", gap: 8 } }, React.createElement("input", { placeholder: "Nome completo *", value: novaPaciente.nome, onChange: (e) => setNova("nome", e.target.value) }), React.createElement("input", { type: "email", placeholder: "E-mail (envia confirmações)", value: novaPaciente.email, onChange: (e) => setNova("email", e.target.value) }), React.createElement("input", { placeholder: "Telefone", value: novaPaciente.telefone, onChange: (e) => setNova("telefone", e.target.value) }), React.createElement("input", { placeholder: "Endereço", value: novaPaciente.endereco, onChange: (e) => setNova("endereco", e.target.value) }), React.createElement("p", { style: { fontSize: 12, color: "var(--ink-soft, #888)", margin: 0 } }, "A paciente será cadastrada automaticamente ao salvar. Se informar e-mail, ela recebe um e-mail de verificação de cadastro e a confirmação do agendamento."))
+            React.createElement("div", { className: "nova-paciente-box", style: { border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: 10, display: "grid", gap: 8 } }, React.createElement("input", { placeholder: "Nome completo *", value: novaPaciente.nome, onChange: (e) => setNova("nome", e.target.value) }), React.createElement("input", { type: "email", placeholder: "E-mail (envia confirmações)", value: novaPaciente.email, onChange: (e) => setNova("email", e.target.value) }), React.createElement("input", { placeholder: "Telefone", value: novaPaciente.telefone, onChange: (e) => setNova("telefone", e.target.value) }), React.createElement(EnderecoInput, { value: novaPaciente.endereco, onChange: (v) => setNova("endereco", v) }), React.createElement("p", { style: { fontSize: 12, color: "var(--ink-soft, #888)", margin: 0 } }, "A paciente será cadastrada automaticamente ao salvar. Se informar e-mail, ela recebe um e-mail de verificação de cadastro e a confirmação do agendamento."))
           )), React.createElement(Field, { label: "Tipo" }, React.createElement("select", { value: form.tipo, onChange: (e) => set("tipo", e.target.value) }, AGENDA_TIPOS.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label)))), React.createElement(Field, { label: "Data e hora" }, React.createElement("input", { type: "datetime-local", value: form.data_hora, onChange: (e) => set("data_hora", e.target.value) })), React.createElement(Field, { label: "Valor (R$) — opcional" }, React.createElement("input", { type: "number", step: "0.01", min: "0", value: form.valor, onChange: (e) => set("valor", e.target.value), placeholder: "ex: 150.00" })), React.createElement(Field, { label: "Observações", full: true }, React.createElement("textarea", { value: form.observacoes, onChange: (e) => set("observacoes", e.target.value) }))), erro && React.createElement("p", { style: { color: "#c62828", fontSize: 13 } }, erro), React.createElement("div", { className: "modal-actions" }, React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancelar"), React.createElement("button", { className: "btn btn-primary", onClick: submit, disabled: saving }, saving ? "Salvando..." : "Salvar evento")))
   );
 }
