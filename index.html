@@ -27,6 +27,14 @@
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 
+<!-- Google Maps Places API — usado no campo de Endereço para autocompletar
+     endereços em tempo real. IMPORTANTE: essa chave está visível no código-fonte
+     (é assim que a Places API funciona no navegador) — restrinja-a no Google
+     Cloud Console (Credenciais > sua chave > Restrições de aplicativo > sites
+     HTTP) para aceitar apenas o domínio do seu site, evitando uso indevido por
+     terceiros. -->
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCUk-WU1NkPLjR54sFjJDsLftB5VMBqfUs&libraries=places"></script>
+
 <script src="app.js"></script>
 </body>
 </html>
