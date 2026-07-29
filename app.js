@@ -240,9 +240,9 @@ function Sidebar({ page, onNavigate }) {
     { key: "sobre", label: "Sobre o sistema", ic: "ℹ️" },
   ];
   return (
-    React.createElement("div", { className: "sidebar" }, React.createElement("div", { className: "sidebar-brand" }, React.createElement("div", { className: "logo-dot" }, "N"), React.createElement("div", null, React.createElement("h1", null, "NASCER"), React.createElement("p", null, "Consultório Obstétrico"))), items.map((it) => (
+    React.createElement("div", { className: "sidebar" }, React.createElement("div", { className: "sidebar-brand" }, React.createElement("div", { className: "logo-dot" }, React.createElement("img", { src: "logo.png", alt: "Graziela Freitas — Enfermeira Obstetra" })), React.createElement("div", null, React.createElement("h1", null, "Graziela Freitas"), React.createElement("p", null, "Enfermeira Obstetra"))), items.map((it) => (
         React.createElement("button", { key: it.key, className: `nav-item ${page === it.key ? "active" : ""}`, onClick: () => onNavigate(it.key) }, React.createElement("span", { className: "ic" }, it.ic), " ", it.label)
-      )), React.createElement("div", { className: "sidebar-footer" }, "Protótipo navegável", React.createElement("br", null), "v0.1 — dados fictícios"))
+      )), React.createElement("div", { className: "sidebar-footer" }, "Sistema NASCER", React.createElement("br", null), "Cuidar de mulheres é acolher histórias que geram vida."))
   );
 }
 
