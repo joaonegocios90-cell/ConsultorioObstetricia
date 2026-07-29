@@ -855,8 +855,23 @@ def update_gestante(handler, params, body, query):
 
 @route("DELETE", "/api/gestantes/{id}")
 def delete_gestante(handler, params, body, query):
+    """Exclui a gestante e todo o histórico vinculado (não há ON DELETE
+    CASCADE no schema, então apagamos manualmente na ordem certa)."""
     conn = get_db()
-    conn.execute("DELETE FROM gestantes WHERE id=?", (params["id"],))
+    gid = params["id"]
+    cur = conn.execute("SELECT id FROM partos WHERE gestante_id=?", (gid,))
+    parto_ids = [r["id"] for r in cur.fetchall()]
+    for pid in parto_ids:
+        conn.execute("DELETE FROM recem_nascidos WHERE parto_id=?", (pid,))
+    conn.execute("DELETE FROM partos WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM prenatal_consultas WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM exames WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM solicitacoes_exames WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM ultrassons WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM vacinas WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM agenda_eventos WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM puerperios WHERE gestante_id=?", (gid,))
+    conn.execute("DELETE FROM gestantes WHERE id=?", (gid,))
     conn.commit()
     conn.close()
     return 200, {"ok": True}
