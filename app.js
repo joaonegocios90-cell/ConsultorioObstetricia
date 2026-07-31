@@ -445,6 +445,7 @@ function CadastroPage({ onSaved, onCancel }) {
         React.createElement("div", { className: "section-title" }, "Cadastrar nova paciente"),
         React.createElement("div", { className: "form-grid" },
           React.createElement(Field, { label: "Nome completo", full: true }, React.createElement("input", { value: form.nome, onChange: (e) => set("nome", e.target.value) })),
+          React.createElement(Field, { label: "Gestante?" }, React.createElement("div", { style: { display: "flex", gap: 8 } }, React.createElement("button", { type: "button", className: form.status !== "paciente" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => set("status", "gestante") }, "Sim"), React.createElement("button", { type: "button", className: form.status === "paciente" ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => set("status", "paciente") }, "Não"))),
           React.createElement(Field, { label: "Data de nascimento" }, React.createElement("input", { type: "date", value: form.data_nascimento || "", onChange: (e) => set("data_nascimento", e.target.value) })),
           React.createElement(Field, { label: "CPF" }, React.createElement("input", { value: form.cpf || "", onChange: (e) => set("cpf", e.target.value), placeholder: "000.000.000-00" })),
           React.createElement(Field, { label: "Telefone" }, React.createElement("input", { value: form.telefone || "", onChange: (e) => set("telefone", e.target.value), placeholder: "(00) 00000-0000" })),
