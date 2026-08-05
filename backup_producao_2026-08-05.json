@@ -1,0 +1,10 @@
+{
+  "observacao": "Backup extraido da API de producao (https://consultorioobstetricia.onrender.com) em 2026-08-05. Todos os 4 registros abaixo foram criados no mesmo segundo (2026-07-16T10:06:16), o que confirma que sao os dados de exemplo do seed.py, e nao cadastros reais feitos depois disso. Isso comprova que o banco SQLite no Render e efemero: qualquer cadastro real feito apos o seeding inicial foi perdido em um redeploy/restart.",
+  "gestantes": [
+    {"id": 1, "nome": "Mariana Costa Silva", "criado_em": "2026-07-16T10:06:16.008880", "status": "gestante"},
+    {"id": 2, "nome": "Fernanda Oliveira Santos", "criado_em": "2026-07-16T10:06:16.017351", "status": "gestante"},
+    {"id": 3, "nome": "Juliana Almeida Pereira", "criado_em": "2026-07-16T10:06:16.017616", "status": "puerperio"},
+    {"id": 4, "nome": "Patrícia Gomes Lima", "criado_em": "2026-07-16T10:06:16.017919", "status": "gestante"}
+  ],
+  "nota": "Como esses 4 registros sao apenas dados de demonstracao (seed.py), nao ha necessidade de restaura-los no banco novo apos configurar o disco persistente. O banco novo pode comecar vazio, e voce recadastra as pacientes reais diretamente pelo sistema."
+}
