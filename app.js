@@ -268,6 +268,7 @@ function Sidebar({ page, onNavigate }) {
     { key: "agenda", label: "Agenda", ic: "📅" },
     { key: "calendario", label: "Calendário", ic: "🗓️" },
     { key: "relatorios", label: "Relatórios", ic: "📈" },
+    { key: "configuracoes", label: "Configurações", ic: "⚙️" },
     { key: "sobre", label: "Sobre o sistema", ic: "ℹ️" },
   ];
   return (
@@ -977,6 +978,7 @@ function CartaoDigitalTab({ g }) {
 function AgendaPage() {
   const [eventos, setEventos] = useState(null);
   const [gestantes, setGestantes] = useState([]);
+  const [tipos, setTipos] = useState([]);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [filtroTipo, setFiltroTipo] = useState("todos");
@@ -984,8 +986,8 @@ function AgendaPage() {
   const [editingEvento, setEditingEvento] = useState(null);
 
   const reload = useCallback(() => {
-    Promise.all([api("/agenda"), api("/gestantes")])
-      .then(([ev, ge]) => { setEventos(ev); setGestantes(ge); })
+    Promise.all([api("/agenda"), api("/gestantes"), api("/tipos-consulta")])
+      .then(([ev, ge, tp]) => { setEventos(ev); setGestantes(ge); setTipos(tp); })
       .catch((e) => setError(e.message));
   }, []);
 
@@ -993,6 +995,8 @@ function AgendaPage() {
 
   if (error) return React.createElement(ApiErrorBanner, { error: error });
   if (!eventos) return React.createElement("div", { className: "empty-state" }, "Carregando agenda...");
+
+  const tiposAtivos = tipos.filter((t) => t.ativo);
 
   const filtered = eventos.filter((e) => filtroTipo === "todos" || e.tipo === filtroTipo);
   const hojeStr = new Date().toISOString().slice(0, 10);
@@ -1024,10 +1028,14 @@ function AgendaPage() {
 
   const handleDeleteEvento = async (ev) => {
     if (!window.confirm(`Excluir este evento (${ev.tipo || "evento"} — ${ev.gestante_nome || "sem paciente"})?\n\nNão pode ser desfeito.`)) return;
+    // Exclusão otimista: some da tela na hora do clique, sem esperar o
+    // round-trip da API nem recarregar a lista inteira de novo. Se a chamada
+    // falhar, o evento volta pra lista e mostra o erro.
+    setEventos((prev) => (prev ? prev.filter((e) => e.id !== ev.id) : prev));
     try {
       await api(`/agenda/${ev.id}`, { method: "DELETE" });
-      reload();
     } catch (e) {
+      setEventos((prev) => (prev ? [...prev, ev] : prev));
       alert("Erro ao excluir: " + e.message);
     }
   };
@@ -1046,8 +1054,8 @@ function AgendaPage() {
   };
 
   return (
-    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Agenda obstétrica"), React.createElement("div", { className: "sub" }, "Consultas, ultrassons, exames, retornos e vacinas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Novo evento")), React.createElement("div", { className: "chip-select", style: { marginBottom: 16 } }, React.createElement("div", { className: `chip ${filtroTipo === "todos" ? "active" : ""}`, onClick: () => setFiltroTipo("todos") }, "Todos"), AGENDA_TIPOS.map((t) => (
-          React.createElement("div", { key: t.key, className: `chip ${filtroTipo === t.key ? "active" : ""}`, onClick: () => setFiltroTipo(t.key) }, t.label)
+    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Agenda obstétrica"), React.createElement("div", { className: "sub" }, "Consultas, ultrassons, exames, retornos e vacinas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Novo evento")), React.createElement("div", { className: "chip-select", style: { marginBottom: 16 } }, React.createElement("div", { className: `chip ${filtroTipo === "todos" ? "active" : ""}`, onClick: () => setFiltroTipo("todos") }, "Todos"), tiposAtivos.map((t) => (
+          React.createElement("div", { key: t.id, className: `chip ${filtroTipo === t.nome ? "active" : ""}`, style: { textTransform: "capitalize" }, onClick: () => setFiltroTipo(t.nome) }, t.nome)
         ))), React.createElement("div", { className: "card", style: { marginBottom: 16 } }, React.createElement("div", { className: "section-title" }, "Próximos eventos (", futuros.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, futuros.map((e) => (
               React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })), React.createElement("td", null, React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, e.status === "agendado" && (
                     React.createElement("div", { style: { display: "flex", gap: 6 } }, React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => updateStatus(e, "confirmado") }, "Confirmar"), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => updateStatus(e, "cancelado") }, "Cancelar"))
@@ -1055,31 +1063,62 @@ function AgendaPage() {
             )), futuros.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "8" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento futuro.")))))), React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Eventos anteriores (", passados.length, ")"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Data"), React.createElement("th", null, "Tipo"), React.createElement("th", null, "Paciente"), React.createElement("th", null, "Observações"), React.createElement("th", null, "Status"), React.createElement("th", null, "Valor / Pagamento"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, passados.slice(0, 20).map((e) => (
               React.createElement("tr", { key: e.id }, React.createElement("td", null, fmtDateTime(e.data_hora)), React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo), React.createElement("td", null, e.gestante_nome || "—"), React.createElement("td", null, e.observacoes), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, React.createElement(ValorCell, { e: e })), React.createElement("td", null, React.createElement(AcoesEventoCell, { e: e })))
             )), passados.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "7" }, React.createElement("div", { className: "empty-state" }, "Nenhum evento anterior.")))))), showForm && (
-        React.createElement(AgendaFormModal, { gestantes: gestantes, onClose: () => setShowForm(false), onSaved: () => { setShowForm(false); reload(); } })
+        React.createElement(AgendaFormModal, { gestantes: gestantes, tipos: tiposAtivos, onClose: () => setShowForm(false), onSaved: () => { setShowForm(false); reload(); } })
       ), editingEvento && (
-        React.createElement(AgendaFormModal, { gestantes: gestantes, initial: editingEvento, onClose: () => setEditingEvento(null), onSaved: () => { setEditingEvento(null); reload(); } })
+        React.createElement(AgendaFormModal, { gestantes: gestantes, tipos: tiposAtivos, initial: editingEvento, onClose: () => setEditingEvento(null), onSaved: () => { setEditingEvento(null); reload(); } })
       ))
   );
 }
 
-function AgendaFormModal({ gestantes, onClose, onSaved, dataInicial, initial }) {
+function AgendaFormModal({ gestantes, tipos, onClose, onSaved, dataInicial, initial }) {
+  const tiposDisponiveis = (tipos && tipos.length > 0) ? tipos : AGENDA_TIPOS.map((t) => ({ id: t.key, nome: t.key, preco: null, limite_diario: null, ativo: true }));
+  const tipoInicial = initial ? initial.tipo : (dataInicial ? undefined : undefined);
   const [modoPaciente, setModoPaciente] = useState("existente");
   const [form, setForm] = useState(initial ? {
     gestante_id: initial.gestante_id || "",
-    tipo: initial.tipo || "consulta",
+    tipo: initial.tipo || (tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta"),
     data_hora: (initial.data_hora || "").slice(0, 16),
     observacoes: initial.observacoes || "",
     valor: initial.valor != null ? initial.valor : "",
   } : {
-    gestante_id: "", tipo: "consulta",
+    gestante_id: "", tipo: tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta",
     data_hora: dataInicial ? `${dataInicial}T09:00` : "",
     observacoes: "", valor: "",
   });
   const [novaPaciente, setNovaPaciente] = useState({ nome: "", email: "", telefone: "", endereco: "" });
   const [saving, setSaving] = useState(false);
   const [erro, setErro] = useState("");
+  const [precoTocado, setPrecoTocado] = useState(!!initial);
+  const [disponibilidade, setDisponibilidade] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const setNova = (k, v) => setNovaPaciente((f) => ({ ...f, [k]: v }));
+
+  const setTipo = (novoTipo) => {
+    set("tipo", novoTipo);
+    if (!precoTocado) {
+      const t = tiposDisponiveis.find((x) => x.nome === novoTipo);
+      set("valor", t && t.preco != null ? t.preco : "");
+    }
+  };
+
+  // Consulta o backend pra saber se o consultório abre nesse dia/horário e
+  // quantas vagas restam pro tipo escolhido, e mostra um aviso ANTES da
+  // profissional tentar salvar (o servidor também valida isso de novo ao
+  // salvar, então não tem como burlar essa checagem).
+  useEffect(() => {
+    const data = (form.data_hora || "").slice(0, 10);
+    if (!data || !form.tipo) { setDisponibilidade(null); return; }
+    let cancelado = false;
+    api(`/agenda/disponibilidade?tipo=${encodeURIComponent(form.tipo)}&data=${data}`)
+      .then((d) => { if (!cancelado) setDisponibilidade(d); })
+      .catch(() => { if (!cancelado) setDisponibilidade(null); });
+    return () => { cancelado = true; };
+  }, [form.tipo, form.data_hora]);
+
+  const bloqueadoPorAgenda = disponibilidade && (
+    !disponibilidade.aberto || (disponibilidade.vagas_restantes !== null && disponibilidade.vagas_restantes !== undefined && disponibilidade.vagas_restantes <= 0)
+  );
+
   const submit = async () => {
     setErro("");
     if (!initial && modoPaciente === "nova" && !novaPaciente.nome.trim()) {
@@ -1120,7 +1159,7 @@ function AgendaFormModal({ gestantes, onClose, onSaved, dataInicial, initial }) 
             React.createElement("select", { value: form.gestante_id, onChange: (e) => set("gestante_id", e.target.value) }, React.createElement("option", { value: "" }, "Sem paciente vinculada"), gestantes.map((g) => React.createElement("option", { key: g.id, value: g.id }, g.nome)))
           ) : (
             React.createElement("div", { className: "nova-paciente-box", style: { border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: 10, display: "grid", gap: 8 } }, React.createElement("input", { placeholder: "Nome completo *", value: novaPaciente.nome, onChange: (e) => setNova("nome", e.target.value) }), React.createElement("input", { type: "email", placeholder: "E-mail (envia confirmações)", value: novaPaciente.email, onChange: (e) => setNova("email", e.target.value) }), React.createElement("input", { placeholder: "Telefone", value: novaPaciente.telefone, onChange: (e) => setNova("telefone", e.target.value) }), React.createElement(EnderecoInput, { value: novaPaciente.endereco, onChange: (v) => setNova("endereco", v) }), React.createElement("p", { style: { fontSize: 12, color: "var(--ink-soft, #888)", margin: 0 } }, "A paciente será cadastrada automaticamente ao salvar. Se informar e-mail, ela recebe um e-mail de verificação de cadastro e a confirmação do agendamento."))
-          )), React.createElement(Field, { label: "Tipo" }, React.createElement("select", { value: form.tipo, onChange: (e) => set("tipo", e.target.value) }, AGENDA_TIPOS.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label)))), React.createElement(Field, { label: "Data e hora" }, React.createElement("input", { type: "datetime-local", value: form.data_hora, onChange: (e) => set("data_hora", e.target.value) })), React.createElement(Field, { label: "Valor (R$) — opcional" }, React.createElement("input", { type: "number", step: "0.01", min: "0", value: form.valor, onChange: (e) => set("valor", e.target.value), placeholder: "ex: 150.00" })), React.createElement(Field, { label: "Observações", full: true }, React.createElement("textarea", { value: form.observacoes, onChange: (e) => set("observacoes", e.target.value) }))), erro && React.createElement("p", { style: { color: "#c62828", fontSize: 13 } }, erro), React.createElement("div", { className: "modal-actions" }, React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancelar"), React.createElement("button", { className: "btn btn-primary", onClick: submit, disabled: saving }, saving ? "Salvando..." : "Salvar evento")))
+          )), React.createElement(Field, { label: "Tipo" }, React.createElement("select", { value: form.tipo, onChange: (e) => setTipo(e.target.value), style: { textTransform: "capitalize" } }, tiposDisponiveis.map((t) => React.createElement("option", { key: t.id, value: t.nome, style: { textTransform: "capitalize" } }, t.nome)))), React.createElement(Field, { label: "Data e hora" }, React.createElement("input", { type: "datetime-local", value: form.data_hora, onChange: (e) => set("data_hora", e.target.value) })), React.createElement(Field, { label: "Valor (R$) — opcional" }, React.createElement("input", { type: "number", step: "0.01", min: "0", value: form.valor, onChange: (e) => { setPrecoTocado(true); set("valor", e.target.value); }, placeholder: "ex: 150.00" })), React.createElement(Field, { label: "Observações", full: true }, React.createElement("textarea", { value: form.observacoes, onChange: (e) => set("observacoes", e.target.value) }))), disponibilidade && React.createElement("div", { className: `badge ${bloqueadoPorAgenda ? "badge-danger" : "badge-ok"}`, style: { marginTop: 4, marginBottom: 4 } }, !disponibilidade.aberto ? `Consultório fechado ${(disponibilidade.dia_semana_nome || "").toLowerCase()}` : disponibilidade.limite_diario ? `${disponibilidade.dia_semana_nome} · ${disponibilidade.abertura}–${disponibilidade.fechamento} · ${disponibilidade.vagas_restantes > 0 ? disponibilidade.vagas_restantes + " vaga(s) livre(s) de " + disponibilidade.limite_diario : "sem vagas nesse dia"}` : `${disponibilidade.dia_semana_nome} · ${disponibilidade.abertura}–${disponibilidade.fechamento}`), erro && React.createElement("p", { style: { color: "#c62828", fontSize: 13 } }, erro), React.createElement("div", { className: "modal-actions" }, React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancelar"), React.createElement("button", { className: "btn btn-primary", onClick: submit, disabled: saving || bloqueadoPorAgenda }, saving ? "Salvando..." : "Salvar evento")))
   );
 }
 
@@ -1234,14 +1273,15 @@ function CalendarioPage() {
   const [anchor, setAnchor] = useState(new Date());
   const [eventos, setEventos] = useState(null);
   const [gestantes, setGestantes] = useState([]);
+  const [tipos, setTipos] = useState([]);
   const [error, setError] = useState(null);
   const [diaSelecionado, setDiaSelecionado] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [dataInicialForm, setDataInicialForm] = useState(null);
 
   const reload = useCallback(() => {
-    Promise.all([api("/agenda"), api("/gestantes")])
-      .then(([ev, ge]) => { setEventos(ev); setGestantes(ge); })
+    Promise.all([api("/agenda"), api("/gestantes"), api("/tipos-consulta")])
+      .then(([ev, ge, tp]) => { setEventos(ev); setGestantes(ge); setTipos(tp.filter((t) => t.ativo)); })
       .catch((e) => setError(e.message));
   }, []);
 
@@ -1266,7 +1306,7 @@ function CalendarioPage() {
       ), diaSelecionado && (
         React.createElement(DiaDetalheModal, { dia: diaSelecionado, eventos: eventosPorDia[diaSelecionado] || [], onClose: () => setDiaSelecionado(null), onNovoEvento: () => { setDataInicialForm(diaSelecionado); setDiaSelecionado(null); setShowForm(true); } })
       ), showForm && (
-        React.createElement(AgendaFormModal, { gestantes: gestantes, dataInicial: dataInicialForm, onClose: () => setShowForm(false), onSaved: () => { setShowForm(false); reload(); } })
+        React.createElement(AgendaFormModal, { gestantes: gestantes, tipos: tipos, dataInicial: dataInicialForm, onClose: () => setShowForm(false), onSaved: () => { setShowForm(false); reload(); } })
       ))
   );
 }
@@ -1381,6 +1421,212 @@ function RelatoriosPage() {
 }
 
 // ============================================================================
+// Configurações do consultório (horário de funcionamento e tipos de consulta)
+// ============================================================================
+
+function ConfiguracoesPage() {
+  const [horarios, setHorarios] = useState(null);
+  const [tipos, setTipos] = useState(null);
+  const [error, setError] = useState(null);
+  const [savingHorarios, setSavingHorarios] = useState(false);
+  const [horariosMsg, setHorariosMsg] = useState("");
+  const [showTipoForm, setShowTipoForm] = useState(false);
+  const [editingTipo, setEditingTipo] = useState(null);
+
+  const reload = useCallback(() => {
+    Promise.all([api("/configuracoes/horario"), api("/tipos-consulta")])
+      .then(([h, t]) => { setHorarios(h); setTipos(t); })
+      .catch((e) => setError(e.message));
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  if (error) return React.createElement(ApiErrorBanner, { error: error });
+  if (!horarios || !tipos) return React.createElement("div", { className: "empty-state" }, "Carregando configurações...");
+
+  const setHorarioDia = (dia, patch) => {
+    setHorarios((prev) => prev.map((h) => (h.dia_semana === dia ? { ...h, ...patch } : h)));
+  };
+
+  const salvarHorarios = async () => {
+    setSavingHorarios(true);
+    setHorariosMsg("");
+    try {
+      const atualizado = await api("/configuracoes/horario", {
+        method: "PUT",
+        body: { dias: horarios.map((h) => ({ dia_semana: h.dia_semana, aberto: h.aberto, abertura: h.abertura, fechamento: h.fechamento })) },
+      });
+      setHorarios(atualizado);
+      setHorariosMsg("Horários salvos.");
+    } catch (e) {
+      setHorariosMsg("Erro: " + e.message);
+    } finally {
+      setSavingHorarios(false);
+    }
+  };
+
+  const excluirTipo = async (t) => {
+    if (!window.confirm(`Excluir o tipo de consulta "${t.nome}"?`)) return;
+    try {
+      await api(`/tipos-consulta/${t.id}`, { method: "DELETE" });
+      reload();
+    } catch (e) {
+      alert("Erro ao excluir: " + e.message);
+    }
+  };
+
+  return (
+    React.createElement("div", null,
+      React.createElement("div", { className: "topbar" },
+        React.createElement("div", null,
+          React.createElement("h2", null, "Configurações do consultório"),
+          React.createElement("div", { className: "sub" }, "Horário de funcionamento e tipos de consulta usados na agenda")
+        )
+      ),
+      React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+        React.createElement("div", { className: "section-title" }, "Horário de funcionamento"),
+        React.createElement("table", null,
+          React.createElement("thead", null,
+            React.createElement("tr", null,
+              React.createElement("th", null, "Dia"),
+              React.createElement("th", null, "Situação"),
+              React.createElement("th", null, "Abertura"),
+              React.createElement("th", null, "Fechamento")
+            )
+          ),
+          React.createElement("tbody", null,
+            horarios.map((h) => (
+              React.createElement("tr", { key: h.dia_semana },
+                React.createElement("td", null, h.dia_semana_nome),
+                React.createElement("td", null,
+                  React.createElement("button", {
+                    type: "button",
+                    className: h.aberto ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost",
+                    onClick: () => setHorarioDia(h.dia_semana, { aberto: h.aberto ? 0 : 1 }),
+                  }, h.aberto ? "Aberto" : "Fechado")
+                ),
+                React.createElement("td", null,
+                  React.createElement("input", {
+                    type: "time", value: h.abertura || "08:00", disabled: !h.aberto,
+                    onChange: (e) => setHorarioDia(h.dia_semana, { abertura: e.target.value }),
+                  })
+                ),
+                React.createElement("td", null,
+                  React.createElement("input", {
+                    type: "time", value: h.fechamento || "18:00", disabled: !h.aberto,
+                    onChange: (e) => setHorarioDia(h.dia_semana, { fechamento: e.target.value }),
+                  })
+                )
+              )
+            ))
+          )
+        ),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 14 } },
+          React.createElement("button", { className: "btn btn-primary", onClick: salvarHorarios, disabled: savingHorarios }, savingHorarios ? "Salvando..." : "Salvar horários"),
+          horariosMsg && React.createElement("span", { style: { fontSize: 13, color: horariosMsg.indexOf("Erro") === 0 ? "#c62828" : "var(--ink-soft, #888)" } }, horariosMsg)
+        )
+      ),
+      React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "section-title" }, "Tipos de consulta",
+          React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => setShowTipoForm(true) }, "+ Novo tipo")
+        ),
+        React.createElement("table", null,
+          React.createElement("thead", null,
+            React.createElement("tr", null,
+              React.createElement("th", null, "Nome"),
+              React.createElement("th", null, "Preço"),
+              React.createElement("th", null, "Limite por dia"),
+              React.createElement("th", null, "Ativo"),
+              React.createElement("th", null, "Ações")
+            )
+          ),
+          React.createElement("tbody", null,
+            tipos.map((t) => (
+              React.createElement("tr", { key: t.id },
+                React.createElement("td", { style: { textTransform: "capitalize" } }, t.nome),
+                React.createElement("td", null, t.preco != null ? `R$ ${Number(t.preco).toFixed(2)}` : "—"),
+                React.createElement("td", null, t.limite_diario || "Sem limite"),
+                React.createElement("td", null, t.ativo ? React.createElement("span", { className: "badge badge-ok" }, "Ativo") : React.createElement("span", { className: "badge badge-neutral" }, "Inativo")),
+                React.createElement("td", null,
+                  React.createElement("div", { style: { display: "flex", gap: 6 } },
+                    React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => setEditingTipo(t) }, "✏️ Editar"),
+                    React.createElement("button", { className: "btn btn-ghost btn-sm", style: { color: "var(--danger)" }, onClick: () => excluirTipo(t) }, "✕ Excluir")
+                  )
+                )
+              )
+            )),
+            tipos.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "5" }, React.createElement("div", { className: "empty-state" }, "Nenhum tipo de consulta cadastrado.")))
+          )
+        )
+      ),
+      showTipoForm && React.createElement(TipoConsultaFormModal, { onClose: () => setShowTipoForm(false), onSaved: () => { setShowTipoForm(false); reload(); } }),
+      editingTipo && React.createElement(TipoConsultaFormModal, { initial: editingTipo, onClose: () => setEditingTipo(null), onSaved: () => { setEditingTipo(null); reload(); } })
+    )
+  );
+}
+
+function TipoConsultaFormModal({ onClose, onSaved, initial }) {
+  const [form, setForm] = useState(initial ? {
+    nome: initial.nome || "", preco: initial.preco != null ? initial.preco : "",
+    limite_diario: initial.limite_diario != null ? initial.limite_diario : "", ativo: initial.ativo !== 0,
+  } : { nome: "", preco: "", limite_diario: "", ativo: true });
+  const [saving, setSaving] = useState(false);
+  const [erro, setErro] = useState("");
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    if (!form.nome.trim()) { setErro("Informe o nome do tipo de consulta."); return; }
+    setSaving(true);
+    setErro("");
+    try {
+      const body = {
+        nome: form.nome.trim(),
+        preco: form.preco !== "" ? parseFloat(form.preco) : null,
+        limite_diario: form.limite_diario !== "" ? parseInt(form.limite_diario, 10) : null,
+        ativo: !!form.ativo,
+      };
+      if (initial) {
+        await api(`/tipos-consulta/${initial.id}`, { method: "PUT", body });
+      } else {
+        await api("/tipos-consulta", { method: "POST", body });
+      }
+      onSaved();
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    React.createElement(Modal, { title: initial ? "Editar tipo de consulta" : "Novo tipo de consulta", onClose: onClose },
+      React.createElement("div", { className: "form-grid" },
+        React.createElement(Field, { label: "Nome", full: true },
+          React.createElement("input", { value: form.nome, onChange: (e) => set("nome", e.target.value), placeholder: "ex: consulta, ultrassom, vacina..." })
+        ),
+        React.createElement(Field, { label: "Preço (R$)" },
+          React.createElement("input", { type: "number", step: "0.01", min: "0", value: form.preco, onChange: (e) => set("preco", e.target.value), placeholder: "ex: 150.00" })
+        ),
+        React.createElement(Field, { label: "Limite máximo por dia" },
+          React.createElement("input", { type: "number", min: "0", value: form.limite_diario, onChange: (e) => set("limite_diario", e.target.value), placeholder: "vazio = sem limite" })
+        ),
+        React.createElement(Field, { label: "Ativo" },
+          React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { type: "button", className: form.ativo ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => set("ativo", true) }, "Sim"),
+            React.createElement("button", { type: "button", className: !form.ativo ? "btn btn-sm btn-primary" : "btn btn-sm btn-ghost", onClick: () => set("ativo", false) }, "Não")
+          )
+        )
+      ),
+      erro && React.createElement("p", { style: { color: "#c62828", fontSize: 13 } }, erro),
+      React.createElement("div", { className: "modal-actions" },
+        React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancelar"),
+        React.createElement("button", { className: "btn btn-primary", onClick: submit, disabled: saving }, saving ? "Salvando..." : "Salvar")
+      )
+    )
+  );
+}
+
+// ============================================================================
 // App raiz
 // ============================================================================
 
@@ -1394,7 +1640,7 @@ function App() {
   const navigateGestantes = (filtro) => { setGestantesFiltroInicial(filtro); setGestanteId(null); setPage("gestantes"); };
 
   return (
-    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "sobre" && React.createElement(SobrePage, null)))
+    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "configuracoes" && React.createElement(ConfiguracoesPage, null), page === "sobre" && React.createElement(SobrePage, null)))
   );
 }
 
