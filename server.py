@@ -20,6 +20,7 @@ import secrets
 import smtplib
 import ssl
 import sqlite3
+import threading
 import urllib.request
 import urllib.error
 from email.mime.text import MIMEText
@@ -304,6 +305,21 @@ CREATE TABLE IF NOT EXISTS puerperios (
     consulta_retorno TEXT,
     FOREIGN KEY (gestante_id) REFERENCES gestantes(id)
 );
+
+CREATE TABLE IF NOT EXISTS tipos_consulta (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL,
+    preco REAL,
+    limite_diario INTEGER,
+    ativo INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS horario_funcionamento (
+    dia_semana INTEGER PRIMARY KEY,
+    aberto INTEGER DEFAULT 1,
+    abertura TEXT DEFAULT '08:00',
+    fechamento TEXT DEFAULT '18:00'
+);
 """
 
 # Postgres não entende "INTEGER PRIMARY KEY AUTOINCREMENT" (é sintaxe do
@@ -412,7 +428,80 @@ def init_db():
             # coluna ja existe — no Postgres a transacao fica "abortada" ate
             # o rollback, entao precisa disso antes de tentar a proxima.
             conn.rollback()
+    _ensure_horario_default(conn)
+    _ensure_tipos_consulta_default(conn)
     conn.close()
+
+
+# --------------------------------------------------------------------------
+# Horario de funcionamento e tipos de consulta (agenda)
+# --------------------------------------------------------------------------
+# dia_semana segue a convencao 0=Domingo .. 6=Sabado (igual ao "%w" do
+# strftime), para bater com a ordem de calendario usual no Brasil.
+
+DIAS_SEMANA_PT = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira",
+                   "Quinta-feira", "Sexta-feira", "Sábado"]
+
+
+def _dia_semana(data_str):
+    """'YYYY-MM-DD' -> 0=Domingo..6=Sabado."""
+    d = datetime.strptime(data_str, "%Y-%m-%d")
+    return (d.weekday() + 1) % 7
+
+
+def _ensure_horario_default(conn):
+    existing = conn.execute("SELECT COUNT(*) as n FROM horario_funcionamento").fetchone()["n"]
+    if existing:
+        return
+    for dia in range(7):
+        aberto = 0 if dia == 0 else 1  # domingo fechado por padrao
+        conn.execute(
+            "INSERT INTO horario_funcionamento (dia_semana, aberto, abertura, fechamento) VALUES (?,?,?,?)",
+            (dia, aberto, "08:00", "18:00"),
+        )
+    conn.commit()
+
+
+def _ensure_tipos_consulta_default(conn):
+    existing = conn.execute("SELECT COUNT(*) as n FROM tipos_consulta").fetchone()["n"]
+    if existing:
+        return
+    for nome in ["consulta", "ultrassom", "exame", "retorno", "vacina"]:
+        conn.execute(
+            "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo) VALUES (?,?,?,1)",
+            (nome, None, None),
+        )
+    conn.commit()
+
+
+def _validar_horario_evento(conn, tipo, data_hora, ignorar_evento_id=None):
+    """Confere se data_hora cai num dia/horario de funcionamento aberto e se
+    o tipo de consulta ainda tem vaga no limite diario configurado. Retorna
+    uma mensagem de erro (string) se inválido, ou None se está tudo certo."""
+    if not data_hora or "T" not in data_hora:
+        return None
+    data, hora = data_hora.split("T")[0], data_hora.split("T")[1][:5]
+    _ensure_horario_default(conn)
+    dia = _dia_semana(data)
+    h = conn.execute("SELECT * FROM horario_funcionamento WHERE dia_semana=?", (dia,)).fetchone()
+    if h and not h["aberto"]:
+        return f"O consultório não atende {DIAS_SEMANA_PT[dia].lower()}."
+    if h and h["abertura"] and h["fechamento"] and (hora < h["abertura"] or hora >= h["fechamento"]):
+        return f"Fora do horário de funcionamento ({h['abertura']} às {h['fechamento']})."
+    if tipo:
+        t = conn.execute("SELECT * FROM tipos_consulta WHERE nome=?", (tipo,)).fetchone()
+        if t and t["limite_diario"]:
+            query = ("SELECT COUNT(*) as n FROM agenda_eventos "
+                      "WHERE tipo=? AND substr(data_hora,1,10)=? AND status != 'cancelado'")
+            params = [tipo, data]
+            if ignorar_evento_id:
+                query += " AND id != ?"
+                params.append(ignorar_evento_id)
+            usados = conn.execute(query, tuple(params)).fetchone()["n"]
+            if usados >= t["limite_diario"]:
+                return (f'Limite diário de {t["limite_diario"]} atendimento(s) do tipo '
+                        f'"{tipo}" já foi atingido nesse dia.')
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -526,7 +615,7 @@ def send_email(destinatario, assunto, corpo_html, tipo="geral"):
             msg["From"] = GMAIL_USER
             msg["To"] = destinatario
             context = ssl.create_default_context()
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=20) as server:
                 server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
                 server.sendmail(GMAIL_USER, [destinatario], msg.as_string())
             enviado = True
@@ -590,6 +679,27 @@ def enviar_whatsapp(telefone, mensagem):
     except urllib.error.URLError as e:
         print(f"[whatsapp] Falha de conexao ao enviar WhatsApp para {numero}: {e}")
         return False
+
+
+
+# --------------------------------------------------------------------------
+# Envio de notificacoes (e-mail/WhatsApp) em segundo plano
+# --------------------------------------------------------------------------
+# send_email() e enviar_whatsapp() fazem chamadas de rede (SMTP/Twilio) que
+# podem demorar varios segundos - ou travar por muito tempo se a rede/porta
+# estiver bloqueada. Antes, essas chamadas rodavam de forma sincrona DENTRO
+# da requisicao HTTP, entao o clique em "Salvar" so retornava (ou parecia
+# travar / "sumir") depois que o e-mail/WhatsApp terminasse de tentar
+# enviar - mesmo que a paciente/agendamento ja estivesse gravado no banco.
+# notificar_async() dispara o envio numa thread separada para a resposta ao
+# cliente voltar imediatamente apos o commit no banco.
+def notificar_async(fn, *args, **kwargs):
+    def _run():
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:  # noqa
+            print(f"[notificacao] Falha ao enviar em segundo plano: {e}")
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def msg_boas_vindas_whatsapp(nome):
@@ -840,9 +950,9 @@ def _criar_gestante(conn, body, enviar_verificacao=True):
     conn.commit()
     row = conn.execute("SELECT * FROM gestantes WHERE id=?", (new_id,)).fetchone()
     if email and enviar_verificacao:
-        send_email(email, "Confirme seu cadastro", tpl_verificacao(body.get("nome", ""), verify_token), tipo="verificacao")
+        notificar_async(send_email, email, "Confirme seu cadastro", tpl_verificacao(body.get("nome", ""), verify_token), tipo="verificacao")
     if body.get("telefone"):
-        enviar_whatsapp(body.get("telefone"), msg_boas_vindas_whatsapp(body.get("nome", "")))
+        notificar_async(enviar_whatsapp, body.get("telefone"), msg_boas_vindas_whatsapp(body.get("nome", "")))
     return row
 
 
@@ -1408,6 +1518,131 @@ def imprimir_orientacoes_papanicolau(handler, params, body, query):
     return 200, _print_shell(f"Orientações Papanicolau — {nome}", corpo)
 
 
+# ---- Configuracoes: tipos de consulta e horario de funcionamento --------
+
+@route("GET", "/api/tipos-consulta")
+def list_tipos_consulta(handler, params, body, query):
+    conn = get_db()
+    _ensure_tipos_consulta_default(conn)
+    rows = conn.execute("SELECT * FROM tipos_consulta ORDER BY nome").fetchall()
+    conn.close()
+    return 200, [dict(r) for r in rows]
+
+
+@route("POST", "/api/tipos-consulta")
+def create_tipo_consulta(handler, params, body, query):
+    nome = (body.get("nome") or "").strip()
+    if not nome:
+        return 400, {"erro": "Nome do tipo de consulta é obrigatório."}
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo) VALUES (?,?,?,?) RETURNING id",
+        (nome, body.get("preco"), body.get("limite_diario"), 1 if body.get("ativo", True) else 0),
+    )
+    new_id = cur.fetchone()["id"]
+    conn.commit()
+    row = conn.execute("SELECT * FROM tipos_consulta WHERE id=?", (new_id,)).fetchone()
+    conn.close()
+    return 201, dict(row)
+
+
+@route("PUT", "/api/tipos-consulta/{id}")
+def update_tipo_consulta(handler, params, body, query):
+    conn = get_db()
+    fields = ["nome", "preco", "limite_diario", "ativo"]
+    updates = {f: body[f] for f in fields if f in body}
+    if "ativo" in updates:
+        updates["ativo"] = 1 if updates["ativo"] else 0
+    if updates:
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        conn.execute(f"UPDATE tipos_consulta SET {set_clause} WHERE id=?", (*updates.values(), params["id"]))
+        conn.commit()
+    row = conn.execute("SELECT * FROM tipos_consulta WHERE id=?", (params["id"],)).fetchone()
+    conn.close()
+    if not row:
+        return 404, {"erro": "Tipo de consulta não encontrado"}
+    return 200, dict(row)
+
+
+@route("DELETE", "/api/tipos-consulta/{id}")
+def delete_tipo_consulta(handler, params, body, query):
+    conn = get_db()
+    conn.execute("DELETE FROM tipos_consulta WHERE id=?", (params["id"],))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
+@route("GET", "/api/configuracoes/horario")
+def get_horario_funcionamento(handler, params, body, query):
+    conn = get_db()
+    _ensure_horario_default(conn)
+    rows = conn.execute("SELECT * FROM horario_funcionamento ORDER BY dia_semana").fetchall()
+    conn.close()
+    resultado = [dict(r) for r in rows]
+    for r in resultado:
+        r["dia_semana_nome"] = DIAS_SEMANA_PT[r["dia_semana"]]
+    return 200, resultado
+
+
+@route("PUT", "/api/configuracoes/horario")
+def update_horario_funcionamento(handler, params, body, query):
+    conn = get_db()
+    _ensure_horario_default(conn)
+    for d in body.get("dias", []):
+        if "dia_semana" not in d:
+            continue
+        conn.execute(
+            "UPDATE horario_funcionamento SET aberto=?, abertura=?, fechamento=? WHERE dia_semana=?",
+            (1 if d.get("aberto") else 0, d.get("abertura") or "08:00", d.get("fechamento") or "18:00",
+             d["dia_semana"]),
+        )
+    conn.commit()
+    rows = conn.execute("SELECT * FROM horario_funcionamento ORDER BY dia_semana").fetchall()
+    conn.close()
+    resultado = [dict(r) for r in rows]
+    for r in resultado:
+        r["dia_semana_nome"] = DIAS_SEMANA_PT[r["dia_semana"]]
+    return 200, resultado
+
+
+@route("GET", "/api/agenda/disponibilidade")
+def disponibilidade(handler, params, body, query):
+    """Dado um tipo de consulta e uma data, informa se o consultorio abre
+    naquele dia/horario e quantas vagas restam no limite diario do tipo -
+    usado pelo formulario de agendamento pra avisar a profissional antes
+    dela tentar salvar um horario indisponivel."""
+    tipo = (query.get("tipo") or [None])[0]
+    data = (query.get("data") or [None])[0]
+    if not data:
+        return 400, {"erro": "Informe a data (YYYY-MM-DD)."}
+    conn = get_db()
+    _ensure_horario_default(conn)
+    dia = _dia_semana(data)
+    h = conn.execute("SELECT * FROM horario_funcionamento WHERE dia_semana=?", (dia,)).fetchone()
+    resultado = {
+        "dia_semana": dia,
+        "dia_semana_nome": DIAS_SEMANA_PT[dia],
+        "aberto": bool(h["aberto"]) if h else True,
+        "abertura": h["abertura"] if h else None,
+        "fechamento": h["fechamento"] if h else None,
+    }
+    if tipo:
+        t = conn.execute("SELECT * FROM tipos_consulta WHERE nome=?", (tipo,)).fetchone()
+        limite = t["limite_diario"] if t else None
+        usados = conn.execute(
+            "SELECT COUNT(*) as n FROM agenda_eventos WHERE tipo=? AND substr(data_hora,1,10)=? AND status != 'cancelado'",
+            (tipo, data),
+        ).fetchone()["n"]
+        resultado["tipo"] = tipo
+        resultado["preco"] = t["preco"] if t else None
+        resultado["limite_diario"] = limite
+        resultado["agendados_no_dia"] = usados
+        resultado["vagas_restantes"] = (limite - usados) if limite else None
+    conn.close()
+    return 200, resultado
+
+
 # ---- Agenda ------------------------------------------------------------
 
 @route("GET", "/api/agenda")
@@ -1435,6 +1670,11 @@ def create_agenda_evento(handler, params, body, query):
         nova_paciente_recem_criada = _criar_gestante(conn, nova_paciente)
         gestante_id = nova_paciente_recem_criada["id"]
 
+    erro_horario = _validar_horario_evento(conn, body.get("tipo"), body.get("data_hora"))
+    if erro_horario:
+        conn.close()
+        return 400, {"erro": erro_horario}
+
     valor = body.get("valor")
     status_pagamento = "pendente" if valor else "nao_aplicavel"
     cur = conn.execute(
@@ -1451,7 +1691,8 @@ def create_agenda_evento(handler, params, body, query):
     if gestante_id:
         g = conn.execute("SELECT nome, email FROM gestantes WHERE id=?", (gestante_id,)).fetchone()
         if g and g["email"]:
-            send_email(
+            notificar_async(
+                send_email,
                 g["email"],
                 f"{(body.get('tipo') or 'atendimento').capitalize()} agendado(a) - {CLINICA_NOME}",
                 tpl_evento_marcado(
@@ -1540,13 +1781,15 @@ def _processar_webhook_pagamento(body, query):
         if evento["gestante_id"]:
             g = conn.execute("SELECT nome, email, telefone FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
             if g and g["email"]:
-                send_email(
+                notificar_async(
+                    send_email,
                     g["email"], "Pagamento confirmado",
                     tpl_pagamento_confirmado(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                     tipo="pagamento_confirmado",
                 )
             if g and g["telefone"]:
-                enviar_whatsapp(
+                notificar_async(
+                    enviar_whatsapp,
                     g["telefone"],
                     msg_pagamento_confirmado_whatsapp(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                 )
@@ -1568,13 +1811,15 @@ def marcar_pago_manual(handler, params, body, query):
     if evento["gestante_id"]:
         g = conn.execute("SELECT nome, email, telefone FROM gestantes WHERE id=?", (evento["gestante_id"],)).fetchone()
         if g and g["email"]:
-            send_email(
+            notificar_async(
+                send_email,
                 g["email"], "Pagamento confirmado",
                 tpl_pagamento_confirmado(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
                 tipo="pagamento_confirmado",
             )
         if g and g["telefone"]:
-            enviar_whatsapp(
+            notificar_async(
+                enviar_whatsapp,
                 g["telefone"],
                 msg_pagamento_confirmado_whatsapp(g["nome"], evento["tipo"] or "atendimento", evento["valor"], evento["data_hora"]),
             )
@@ -1586,8 +1831,19 @@ def marcar_pago_manual(handler, params, body, query):
 @route("PUT", "/api/agenda/{id}")
 def update_agenda_evento(handler, params, body, query):
     conn = get_db()
+    existing = conn.execute("SELECT * FROM agenda_eventos WHERE id=?", (params["id"],)).fetchone()
+    if not existing:
+        conn.close()
+        return 404, {"erro": "Evento não encontrado"}
     fields = ["gestante_id", "tipo", "data_hora", "status", "observacoes", "valor", "status_pagamento"]
     updates = {f: body[f] for f in fields if f in body}
+    if "tipo" in updates or "data_hora" in updates:
+        tipo_final = updates.get("tipo", existing["tipo"])
+        data_hora_final = updates.get("data_hora", existing["data_hora"])
+        erro_horario = _validar_horario_evento(conn, tipo_final, data_hora_final, ignorar_evento_id=params["id"])
+        if erro_horario:
+            conn.close()
+            return 400, {"erro": erro_horario}
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(f"UPDATE agenda_eventos SET {set_clause} WHERE id=?", (*updates.values(), params["id"]))
