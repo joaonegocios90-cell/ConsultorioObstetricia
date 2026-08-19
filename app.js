@@ -264,7 +264,7 @@ function Sidebar({ page, onNavigate }) {
   const items = [
     { key: "dashboard", label: "Dashboard", ic: "📊" },
     { key: "cadastros", label: "Cadastros", ic: "📝" },
-    { key: "gestantes", label: "Gestantes", ic: "🤰" },
+    { key: "gestantes", label: "Pacientes", ic: "🤰" },
     { key: "agenda", label: "Agenda", ic: "📅" },
     { key: "calendario", label: "Calendário", ic: "🗓️" },
     { key: "relatorios", label: "Relatórios", ic: "📈" },
@@ -316,14 +316,19 @@ function ApiErrorBanner({ error }) {
 
 function GestantesListPage({ onOpenGestante, initialFiltro }) {
   const [gestantes, setGestantes] = useState(null);
+  const [agenda, setAgenda] = useState([]);
+  const [tipos, setTipos] = useState([]);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
   const [filtro, setFiltro] = useState(initialFiltro || "todas");
+  const [filtroTipoConsulta, setFiltroTipoConsulta] = useState("todos");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
 
   const reload = useCallback(() => {
-    api("/gestantes").then(setGestantes).catch((e) => setError(e.message));
+    Promise.all([api("/gestantes"), api("/agenda"), api("/tipos-consulta")])
+      .then(([ge, ag, tp]) => { setGestantes(ge); setAgenda(ag); setTipos(tp.filter((t) => t.ativo)); })
+      .catch((e) => setError(e.message));
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
@@ -341,18 +346,25 @@ function GestantesListPage({ onOpenGestante, initialFiltro }) {
   if (error) return React.createElement(ApiErrorBanner, { error: error });
   if (!gestantes) return React.createElement("div", { className: "empty-state" }, "Carregando...");
 
+  // Pacientes que têm pelo menos um evento na agenda do tipo escolhido no
+  // filtro (ex: só quem tem "ultrassom" marcado, passado ou futuro).
+  const gestanteIdsComTipo = filtroTipoConsulta === "todos" ? null : new Set(
+    agenda.filter((e) => e.tipo === filtroTipoConsulta && e.gestante_id).map((e) => e.gestante_id)
+  );
+
   const filtered = gestantes.filter((g) => {
     if (search && !g.nome.toLowerCase().includes(search.toLowerCase())) return false;
     if (filtro === "risco" && !g.alto_risco) return false;
     if (filtro === "puerperio" && g.status !== "puerperio") return false;
     if (filtro === "gestante" && g.status !== "gestante") return false;
+    if (gestanteIdsComTipo && !gestanteIdsComTipo.has(g.id)) return false;
     return true;
   });
 
   return (
-    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Gestantes"), React.createElement("div", { className: "sub" }, gestantes.length, " pacientes cadastradas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Nova gestante")), React.createElement("div", { className: "card" }, React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" } }, React.createElement("input", { className: "search-input", placeholder: "Buscar por nome...", value: search, onChange: (e) => setSearch(e.target.value) }), React.createElement("div", { className: "chip-select" }, [["todas", "Todas"], ["gestante", "Gestantes"], ["puerperio", "Puérperas"], ["risco", "Alto risco"]].map(([k, l]) => (
+    React.createElement("div", null, React.createElement("div", { className: "topbar" }, React.createElement("div", null, React.createElement("h2", null, "Pacientes"), React.createElement("div", { className: "sub" }, gestantes.length, " pacientes cadastradas")), React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Nova gestante")), React.createElement("div", { className: "card" }, React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" } }, React.createElement("input", { className: "search-input", placeholder: "Buscar por nome...", value: search, onChange: (e) => setSearch(e.target.value) }), React.createElement("div", { className: "chip-select" }, [["todas", "Todas"], ["gestante", "Gestantes"], ["puerperio", "Puérperas"], ["risco", "Alto risco"]].map(([k, l]) => (
               React.createElement("div", { key: k, className: `chip ${filtro === k ? "active" : ""}`, onClick: () => setFiltro(k) }, l)
-            )))), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Paciente"), React.createElement("th", null, "IG"), React.createElement("th", null, "DPP"), React.createElement("th", null, "Convênio"), React.createElement("th", null, "Risco"), React.createElement("th", null, "Status"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, filtered.map((g) => (
+            ))), React.createElement("select", { value: filtroTipoConsulta, onChange: (e) => setFiltroTipoConsulta(e.target.value), style: { padding: "9px 12px", borderRadius: 9, border: "1px solid var(--border, #e0e0e0)", fontSize: 13.5, textTransform: "capitalize" } }, React.createElement("option", { value: "todos" }, "Todos os tipos de consulta"), tipos.map((t) => React.createElement("option", { key: t.id, value: t.nome, style: { textTransform: "capitalize" } }, t.nome)))), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Paciente"), React.createElement("th", null, "IG"), React.createElement("th", null, "DPP"), React.createElement("th", null, "Convênio"), React.createElement("th", null, "Risco"), React.createElement("th", null, "Status"), React.createElement("th", null, "Ações"))), React.createElement("tbody", null, filtered.map((g) => (
               React.createElement("tr", { key: g.id, onClick: () => onOpenGestante(g.id) }, React.createElement("td", null, React.createElement("div", { className: "gestante-row" }, React.createElement("div", { className: "avatar-circle" }, initials(g.nome)), React.createElement("div", { className: "info" }, React.createElement("div", { className: "nome" }, g.nome), React.createElement("div", { className: "meta" }, g.telefone || "sem telefone")))), React.createElement("td", null, g.idade_gestacional ? g.idade_gestacional.texto : "—"), React.createElement("td", null, fmtDate(g.dpp)), React.createElement("td", null, g.convenio || "—"), React.createElement("td", null, g.alto_risco ? React.createElement("span", { className: "badge badge-danger" }, "Alto risco") : React.createElement("span", { className: "badge badge-ok" }, "Habitual")), React.createElement("td", { style: { textTransform: "capitalize" } }, React.createElement("span", { className: "badge badge-lavender" }, g.status)), React.createElement("td", { onClick: (e) => e.stopPropagation() }, React.createElement("div", { style: { display: "flex", gap: 6, justifyContent: "flex-end" } }, React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Editar", onClick: () => setEditing(g) }, "✏️ Editar"), React.createElement("button", { className: "btn btn-ghost btn-sm", title: "Excluir", style: { color: "var(--danger)" }, onClick: () => handleDelete(g) }, "✕ Excluir"))))
             )), filtered.length === 0 && (
               React.createElement("tr", null, React.createElement("td", { colSpan: "7" }, React.createElement("div", { className: "empty-state" }, "Nenhuma gestante encontrada.")))
@@ -1072,18 +1084,27 @@ function AgendaPage() {
 
 function AgendaFormModal({ gestantes, tipos, onClose, onSaved, dataInicial, initial }) {
   const tiposDisponiveis = (tipos && tipos.length > 0) ? tipos : AGENDA_TIPOS.map((t) => ({ id: t.key, nome: t.key, preco: null, limite_diario: null, ativo: true }));
-  const tipoInicial = initial ? initial.tipo : (dataInicial ? undefined : undefined);
   const [modoPaciente, setModoPaciente] = useState("existente");
-  const [form, setForm] = useState(initial ? {
-    gestante_id: initial.gestante_id || "",
-    tipo: initial.tipo || (tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta"),
-    data_hora: (initial.data_hora || "").slice(0, 16),
-    observacoes: initial.observacoes || "",
-    valor: initial.valor != null ? initial.valor : "",
-  } : {
-    gestante_id: "", tipo: tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta",
-    data_hora: dataInicial ? `${dataInicial}T09:00` : "",
-    observacoes: "", valor: "",
+  const [form, setForm] = useState(() => {
+    if (initial) {
+      return {
+        gestante_id: initial.gestante_id || "",
+        tipo: initial.tipo || (tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta"),
+        data_hora: (initial.data_hora || "").slice(0, 16),
+        observacoes: initial.observacoes || "",
+        valor: initial.valor != null ? initial.valor : "",
+      };
+    }
+    const tipoDefault = tiposDisponiveis[0] ? tiposDisponiveis[0].nome : "consulta";
+    // Já nasce com o valor do tipo padrão preenchido — sem isso, o campo só
+    // sincronizava quando a profissional trocava o tipo manualmente no
+    // select, ficando vazio na primeira abertura do formulário.
+    const valorDefault = tiposDisponiveis[0] && tiposDisponiveis[0].preco != null ? tiposDisponiveis[0].preco : "";
+    return {
+      gestante_id: "", tipo: tipoDefault,
+      data_hora: dataInicial ? `${dataInicial}T09:00` : "",
+      observacoes: "", valor: valorDefault,
+    };
   });
   const [novaPaciente, setNovaPaciente] = useState({ nome: "", email: "", telefone: "", endereco: "" });
   const [saving, setSaving] = useState(false);
