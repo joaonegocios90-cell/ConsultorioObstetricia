@@ -98,12 +98,43 @@ const PARTO_TIPOS = ["normal", "cesarea", "forceps"];
 // Helpers
 // ============================================================================
 
+const AUTH_TOKEN_KEY = "nascer_auth_token";
+
+function getAuthToken() {
+  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ""; } catch (e) { return ""; }
+}
+function setAuthToken(token) {
+  try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) { /* ignora — sem storage disponivel */ }
+}
+function clearAuthToken() {
+  try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) { /* ignora */ }
+}
+
+function printUrl(path) {
+  // Links de impressão abrem numa aba nova (window.open), que não consegue
+  // mandar o header Authorization — por isso o token vai como query string
+  // aqui (o backend aceita os dois formatos, ver _extrair_token).
+  const token = getAuthToken();
+  const sep = path.includes("?") ? "&" : "?";
+  return `${API_BASE}${path}${token ? `${sep}token=${encodeURIComponent(token)}` : ""}`;
+}
+
 async function api(path, { method = "GET", body } = {}) {
+  const token = getAuthToken();
+  const headers = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401 && path !== "/login") {
+    // Sessão expirou ou token inválido — avisa o AuthGate pra voltar pra
+    // tela de login, em vez de deixar a tela travada com erros silenciosos.
+    clearAuthToken();
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ erro: "Erro desconhecido" }));
     throw new Error(err.erro || `Erro ${res.status}`);
@@ -260,7 +291,7 @@ function RiskPills({ value, onChange }) {
 // Sidebar
 // ============================================================================
 
-function Sidebar({ page, onNavigate }) {
+function Sidebar({ page, onNavigate, usuarioLogado, onLogout }) {
   const items = [
     { key: "dashboard", label: "Dashboard", ic: "📊" },
     { key: "cadastros", label: "Cadastros", ic: "📝" },
@@ -274,7 +305,7 @@ function Sidebar({ page, onNavigate }) {
   return (
     React.createElement("div", { className: "sidebar" }, React.createElement("div", { className: "sidebar-brand" }, React.createElement("div", { className: "logo-dot" }, React.createElement("img", { src: "logo.png", alt: "Graziela Freitas — Enfermeira Obstetra" })), React.createElement("div", null, React.createElement("h1", null, "Graziela Freitas"), React.createElement("p", null, "Enfermeira Obstetra"))), items.map((it) => (
         React.createElement("button", { key: it.key, className: `nav-item ${page === it.key ? "active" : ""}`, onClick: () => onNavigate(it.key) }, React.createElement("span", { className: "ic" }, it.ic), " ", it.label)
-      )), React.createElement("div", { className: "sidebar-footer" }, "Sistema NASCER", React.createElement("br", null), "Cuidar de mulheres é acolher histórias que geram vida."))
+      )), React.createElement("div", { className: "sidebar-footer" }, usuarioLogado && React.createElement("div", { style: { marginBottom: 8, fontWeight: 600 } }, "👤 ", usuarioLogado), "Sistema NASCER", React.createElement("br", null), "Cuidar de mulheres é acolher histórias que geram vida.", onLogout && React.createElement("button", { className: "btn btn-ghost btn-sm", style: { marginTop: 10, width: "100%", color: "#fff", borderColor: "rgba(255,255,255,0.4)" }, onClick: onLogout }, "Sair")))
   );
 }
 
@@ -536,7 +567,7 @@ function GestanteDetailPage({ gestanteId, onBack }) {
   return (
     React.createElement("div", null, React.createElement("button", { className: "btn btn-ghost btn-sm", style: { marginBottom: 14 }, onClick: onBack }, "← Voltar para gestantes"), React.createElement("div", { className: "card", style: { marginBottom: 18 } }, React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 } }, React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center" } }, React.createElement("div", { className: "avatar-circle", style: { width: 54, height: 54, fontSize: 18 } }, initials(g.nome)), React.createElement("div", null, React.createElement("h2", { style: { margin: 0 } }, g.nome), React.createElement("div", { className: "sub", style: { marginTop: 4 } }, g.convenio || "—", " · ", g.tipo_sanguineo || "tipo sang. não informado", " · ", g.telefone || "sem telefone"), React.createElement("div", { style: { marginTop: 8 } }, React.createElement("span", { className: "badge badge-lavender", style: { marginRight: 6 } }, g.status === "gestante" ? "Gestante" : g.status === "puerperio" ? "Puérpera" : "Finalizada"), g.idade_gestacional && React.createElement("span", { className: "badge badge-teal", style: { marginRight: 6 } }, "IG ", g.idade_gestacional.texto), g.dpp && React.createElement("span", { className: "badge badge-neutral", style: { marginRight: 6 } }, "DPP ", fmtDate(g.dpp)), g.alto_risco && React.createElement("span", { className: "badge badge-danger" }, "Alto risco")), g.condicoes_risco.length > 0 && (
                 React.createElement("div", { style: { marginTop: 8 } }, g.condicoes_risco.map((c) => React.createElement("span", { key: c, className: "risk-tag" }, riskLabel(c))))
-              ))), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => window.open(`${API_BASE}/gestantes/${g.id}/ficha/imprimir`, "_blank") }, "🖨️ Imprimir ficha"), React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setEditForm(true) }, "Editar cadastro"))), React.createElement("div", { className: "tabs" }, tabs.map(([k, l]) => (
+              ))), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => window.open(printUrl(`/gestantes/${g.id}/ficha/imprimir`), "_blank") }, "🖨️ Imprimir ficha"), React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setEditForm(true) }, "Editar cadastro"))), React.createElement("div", { className: "tabs" }, tabs.map(([k, l]) => (
           React.createElement("div", { key: k, className: `tab ${tab === k ? "active" : ""}`, onClick: () => setTab(k) }, l)
         ))), tab === "dados" && React.createElement(DadosGeraisTab, { g: g, reload: reload }), tab === "prenatal" && React.createElement(ProntuarioTab, { g: g, reload: reload }), tab === "exames" && React.createElement(ExamesTab, { g: g, reload: reload }), tab === "ultrassons" && React.createElement(UltrassonsTab, { g: g, reload: reload }), tab === "vacinas" && React.createElement(VacinasTab, { g: g, reload: reload }), tab === "parto" && React.createElement(PartoTab, { g: g, reload: reload }), tab === "puerperio" && React.createElement(PuerperioTab, { g: g, reload: reload }), tab === "timeline" && React.createElement(TimelineTab, { g: g }), tab === "cartao" && React.createElement(CartaoDigitalTab, { g: g }), editForm && (
         React.createElement(GestanteFormModal, { initial: g, onClose: () => setEditForm(false), onSaved: () => { setEditForm(false); reload(); } })
@@ -758,7 +789,7 @@ function ExamesTab({ g, reload }) {
   };
 
   const imprimirOrientacoesPapanicolau = (exame) => {
-    window.open(`${API_BASE}/exames/${exame.id}/papanicolau/imprimir`, "_blank");
+    window.open(printUrl(`/exames/${exame.id}/papanicolau/imprimir`), "_blank");
   };
 
   const solicitacoes = g.solicitacoes_exames || [];
@@ -767,7 +798,7 @@ function ExamesTab({ g, reload }) {
     React.createElement("div", null, React.createElement("div", { className: "card", style: { marginBottom: 16 } }, React.createElement("div", { className: "section-title" }, "Exames (", g.exames.length, ")", React.createElement("div", { style: { display: "flex", gap: 8 } }, React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => setShowPainel(true) }, "🖨️ Solicitar exames (painel pré-natal)"), React.createElement("button", { className: "btn btn-primary btn-sm", onClick: () => setShowForm(true) }, "+ Solicitar exame"))), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Exame"), React.createElement("th", null, "Data"), React.createElement("th", null, "Status"), React.createElement("th", null, "Resultado"), React.createElement("th", null))), React.createElement("tbody", null, g.exames.map((e) => (
             React.createElement("tr", { key: e.id }, React.createElement("td", null, e.tipo, e.horario ? ` · ${e.horario}` : ""), React.createElement("td", null, fmtDate(e.data)), React.createElement("td", null, React.createElement(StatusBadge, { status: e.status })), React.createElement("td", null, e.resultado || "—"), React.createElement("td", null, React.createElement("div", { style: { display: "flex", gap: 6 } }, e.status !== "realizado" && React.createElement("button", { className: "btn btn-secondary btn-sm", onClick: () => markDone(e) }, "Registrar resultado"), e.tipo === "Papanicolau (Preventivo)" && React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => imprimirOrientacoesPapanicolau(e) }, "🖨️ Orientações"))))
           )), g.exames.length === 0 && React.createElement("tr", null, React.createElement("td", { colSpan: "5" }, React.createElement("div", { className: "empty-state" }, "Nenhum exame solicitado.")))))), React.createElement("div", { className: "card" }, React.createElement("div", { className: "section-title" }, "Solicitações de exames impressas (", solicitacoes.length, ")"), solicitacoes.length === 0 && React.createElement("div", { className: "empty-state" }, "Nenhuma solicitação gerada ainda."), solicitacoes.map((s) => (
-        React.createElement("div", { key: s.id, className: "gestante-card" }, React.createElement("div", null, React.createElement("div", { className: "nome" }, fmtDate(s.data), " · ", s.itens.length, " exame(s)"), React.createElement("div", { className: "meta" }, s.profissional)), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => window.open(`${API_BASE}/gestantes/${g.id}/solicitacoes-exames/${s.id}/imprimir`, "_blank") }, "🖨️ Reimprimir"))
+        React.createElement("div", { key: s.id, className: "gestante-card" }, React.createElement("div", null, React.createElement("div", { className: "nome" }, fmtDate(s.data), " · ", s.itens.length, " exame(s)"), React.createElement("div", { className: "meta" }, s.profissional)), React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => window.open(printUrl(`/gestantes/${g.id}/solicitacoes-exames/${s.id}/imprimir`), "_blank") }, "🖨️ Reimprimir"))
       ))), showForm && (
         React.createElement(SimpleFormModal, { title: "Solicitar exame", fields: [
             { key: "tipo", label: "Tipo de exame", type: "select", options: EXAME_TIPOS },
@@ -775,7 +806,7 @@ function ExamesTab({ g, reload }) {
             { key: "horario", label: "Horário (se aplicável)", type: "time" },
           ], onClose: () => setShowForm(false), onSubmit: async (body) => { await api(`/gestantes/${g.id}/exames`, { method: "POST", body: { ...body, status: "pendente" } }); setShowForm(false); reload(); } })
       ), showPainel && (
-        React.createElement(SolicitacaoExamesModal, { gestanteId: g.id, onClose: () => setShowPainel(false), onSaved: (s) => { setShowPainel(false); reload(); window.open(`${API_BASE}/gestantes/${g.id}/solicitacoes-exames/${s.id}/imprimir`, "_blank"); } })
+        React.createElement(SolicitacaoExamesModal, { gestanteId: g.id, onClose: () => setShowPainel(false), onSaved: (s) => { setShowPainel(false); reload(); window.open(printUrl(`/gestantes/${g.id}/solicitacoes-exames/${s.id}/imprimir`), "_blank"); } })
       ))
   );
 }
@@ -1453,12 +1484,40 @@ function ConfiguracoesPage() {
   const [horariosMsg, setHorariosMsg] = useState("");
   const [showTipoForm, setShowTipoForm] = useState(false);
   const [editingTipo, setEditingTipo] = useState(null);
+  const [senhaForm, setSenhaForm] = useState({ senha_atual: "", senha_nova: "", senha_confirma: "" });
+  const [senhaSalvando, setSenhaSalvando] = useState(false);
+  const [senhaMsg, setSenhaMsg] = useState("");
 
   const reload = useCallback(() => {
     Promise.all([api("/configuracoes/horario"), api("/tipos-consulta")])
       .then(([h, t]) => { setHorarios(h); setTipos(t); })
       .catch((e) => setError(e.message));
   }, []);
+
+  const salvarSenha = async () => {
+    setSenhaMsg("");
+    if (senhaForm.senha_nova.length < 6) {
+      setSenhaMsg("Erro: a nova senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (senhaForm.senha_nova !== senhaForm.senha_confirma) {
+      setSenhaMsg("Erro: a confirmação não bate com a nova senha.");
+      return;
+    }
+    setSenhaSalvando(true);
+    try {
+      await api("/trocar-senha", {
+        method: "POST",
+        body: { senha_atual: senhaForm.senha_atual, senha_nova: senhaForm.senha_nova },
+      });
+      setSenhaForm({ senha_atual: "", senha_nova: "", senha_confirma: "" });
+      setSenhaMsg("Senha alterada com sucesso.");
+    } catch (e) {
+      setSenhaMsg("Erro: " + e.message);
+    } finally {
+      setSenhaSalvando(false);
+    }
+  };
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -1580,6 +1639,16 @@ function ConfiguracoesPage() {
           )
         )
       ),
+      React.createElement("div", { className: "card", style: { marginTop: 16, maxWidth: 420 } },
+        React.createElement("div", { className: "section-title" }, "Minha conta"),
+        React.createElement(Field, { label: "Senha atual" }, React.createElement("input", { type: "password", value: senhaForm.senha_atual, onChange: (e) => setSenhaForm((f) => ({ ...f, senha_atual: e.target.value })) })),
+        React.createElement(Field, { label: "Nova senha" }, React.createElement("input", { type: "password", value: senhaForm.senha_nova, onChange: (e) => setSenhaForm((f) => ({ ...f, senha_nova: e.target.value })) })),
+        React.createElement(Field, { label: "Confirmar nova senha" }, React.createElement("input", { type: "password", value: senhaForm.senha_confirma, onChange: (e) => setSenhaForm((f) => ({ ...f, senha_confirma: e.target.value })) })),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 10 } },
+          React.createElement("button", { className: "btn btn-primary", onClick: salvarSenha, disabled: senhaSalvando }, senhaSalvando ? "Salvando..." : "Trocar senha"),
+          senhaMsg && React.createElement("span", { style: { fontSize: 13, color: senhaMsg.indexOf("Erro") === 0 ? "#c62828" : "var(--ink-soft, #888)" } }, senhaMsg)
+        )
+      ),
       showTipoForm && React.createElement(TipoConsultaFormModal, { onClose: () => setShowTipoForm(false), onSaved: () => { setShowTipoForm(false); reload(); } }),
       editingTipo && React.createElement(TipoConsultaFormModal, { initial: editingTipo, onClose: () => setEditingTipo(null), onSaved: () => { setEditingTipo(null); reload(); } })
     )
@@ -1651,7 +1720,7 @@ function TipoConsultaFormModal({ onClose, onSaved, initial }) {
 // App raiz
 // ============================================================================
 
-function App() {
+function App({ usuarioLogado, onLogout }) {
   const [page, setPage] = useState("dashboard");
   const [gestanteId, setGestanteId] = useState(null);
   const [gestantesFiltroInicial, setGestantesFiltroInicial] = useState(null);
@@ -1661,9 +1730,79 @@ function App() {
   const navigateGestantes = (filtro) => { setGestantesFiltroInicial(filtro); setGestanteId(null); setPage("gestantes"); };
 
   return (
-    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "configuracoes" && React.createElement(ConfiguracoesPage, null), page === "sobre" && React.createElement(SobrePage, null)))
+    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate, usuarioLogado: usuarioLogado, onLogout: onLogout }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "configuracoes" && React.createElement(ConfiguracoesPage, null), page === "sobre" && React.createElement(SobrePage, null)))
   );
 }
 
+// ============================================================================
+// Login e controle de acesso
+// ============================================================================
+
+function LoginPage({ onLogin }) {
+  const [usuario, setUsuario] = useState("");
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [entrando, setEntrando] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErro("");
+    setEntrando(true);
+    try {
+      const res = await api("/login", { method: "POST", body: { usuario, senha } });
+      setAuthToken(res.token);
+      onLogin(res.usuario);
+    } catch (err) {
+      setErro(err.message);
+    } finally {
+      setEntrando(false);
+    }
+  };
+
+  return (
+    React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #fdf2f6, #f7d9e6)" } },
+      React.createElement("form", { onSubmit: submit, className: "card", style: { width: 340, padding: 28 } },
+        React.createElement("div", { style: { textAlign: "center", marginBottom: 18 } },
+          React.createElement("img", { src: "logo.png", alt: "Graziela Freitas", style: { width: 64, height: 64, borderRadius: "50%", marginBottom: 8 } }),
+          React.createElement("h2", { style: { margin: 0 } }, "Graziela Freitas"),
+          React.createElement("div", { className: "sub" }, "Enfermeira Obstetra · acesso restrito")
+        ),
+        erro && React.createElement("div", { className: "alert-banner", style: { marginBottom: 12 } }, erro),
+        React.createElement(Field, { label: "Usuário" }, React.createElement("input", { value: usuario, onChange: (e) => setUsuario(e.target.value), autoFocus: true })),
+        React.createElement(Field, { label: "Senha" }, React.createElement("input", { type: "password", value: senha, onChange: (e) => setSenha(e.target.value) })),
+        React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%", marginTop: 14 }, disabled: entrando }, entrando ? "Entrando..." : "Entrar")
+      )
+    )
+  );
+}
+
+function AuthGate() {
+  const [authed, setAuthed] = useState(!!getAuthToken());
+  const [usuarioLogado, setUsuarioLogado] = useState(null);
+
+  useEffect(() => {
+    const onUnauthorized = () => setAuthed(false);
+    window.addEventListener("auth:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("auth:unauthorized", onUnauthorized);
+  }, []);
+
+  const handleLogin = (usuario) => {
+    setUsuarioLogado(usuario);
+    setAuthed(true);
+  };
+
+  const handleLogout = () => {
+    api("/logout", { method: "POST" }).catch(() => { /* token ja invalido, tanto faz */ });
+    clearAuthToken();
+    setUsuarioLogado(null);
+    setAuthed(false);
+  };
+
+  if (!authed) {
+    return React.createElement(LoginPage, { onLogin: handleLogin });
+  }
+  return React.createElement(App, { usuarioLogado: usuarioLogado, onLogout: handleLogout });
+}
+
 const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(React.createElement(App, null));
+root.render(React.createElement(AuthGate, null));

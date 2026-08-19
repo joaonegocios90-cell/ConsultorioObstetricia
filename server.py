@@ -14,6 +14,8 @@ Servidor sobe em http://localhost:8000
 
 import base64
 import calendar
+import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -320,6 +322,22 @@ CREATE TABLE IF NOT EXISTS horario_funcionamento (
     abertura TEXT DEFAULT '08:00',
     fechamento TEXT DEFAULT '18:00'
 );
+
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario TEXT UNIQUE NOT NULL,
+    senha_hash TEXT NOT NULL,
+    senha_salt TEXT NOT NULL,
+    criado_em TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessoes (
+    token TEXT PRIMARY KEY,
+    usuario_id INTEGER NOT NULL,
+    criado_em TEXT,
+    expira_em TEXT,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
 """
 
 # Postgres não entende "INTEGER PRIMARY KEY AUTOINCREMENT" (é sintaxe do
@@ -430,7 +448,91 @@ def init_db():
             conn.rollback()
     _ensure_horario_default(conn)
     _ensure_tipos_consulta_default(conn)
+    _ensure_admin_default(conn)
     conn.close()
+
+
+# --------------------------------------------------------------------------
+# Login / autenticacao
+# --------------------------------------------------------------------------
+# Sistema de um unico consultorio -> um usuario "admin" e suficiente por
+# enquanto. Senha guardada com hash PBKDF2-SHA256 (nunca em texto puro).
+# Sessao fica num token aleatorio guardado no banco (sobrevive a reinicios
+# do servidor, ao contrario de um dict em memoria).
+
+SESSAO_DIAS_VALIDADE = 30
+
+
+def _hash_senha(senha, salt_hex=None):
+    if salt_hex is None:
+        salt_hex = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", senha.encode("utf-8"), bytes.fromhex(salt_hex), 100_000)
+    return h.hex(), salt_hex
+
+
+def _verificar_senha(senha, senha_hash, senha_salt):
+    h, _ = _hash_senha(senha, senha_salt)
+    return hmac.compare_digest(h, senha_hash)
+
+
+def _ensure_admin_default(conn):
+    existing = conn.execute("SELECT COUNT(*) as n FROM usuarios").fetchone()["n"]
+    if existing:
+        return
+    usuario = os.environ.get("ADMIN_USER", "admin")
+    senha = os.environ.get("ADMIN_PASSWORD")
+    senha_gerada = not senha
+    if not senha:
+        senha = "trocar123"
+    senha_hash, senha_salt = _hash_senha(senha)
+    conn.execute(
+        "INSERT INTO usuarios (usuario, senha_hash, senha_salt, criado_em) VALUES (?,?,?,?)",
+        (usuario, senha_hash, senha_salt, datetime.now().isoformat()),
+    )
+    conn.commit()
+    if senha_gerada:
+        print(f"[login] Usuario padrao criado -> usuario=\"{usuario}\" senha=\"{senha}\". "
+              f"Troque a senha assim que fizer o primeiro login (tela de Configuracoes), "
+              f"ou defina ADMIN_USER/ADMIN_PASSWORD nas variaveis de ambiente antes do proximo deploy.")
+
+
+def _criar_sessao(conn, usuario_id):
+    token = secrets.token_urlsafe(32)
+    agora = datetime.now()
+    expira = agora + timedelta(days=SESSAO_DIAS_VALIDADE)
+    conn.execute(
+        "INSERT INTO sessoes (token, usuario_id, criado_em, expira_em) VALUES (?,?,?,?)",
+        (token, usuario_id, agora.isoformat(), expira.isoformat()),
+    )
+    conn.commit()
+    return token
+
+
+def _validar_token(conn, token):
+    if not token:
+        return None
+    row = conn.execute(
+        "SELECT sessoes.*, usuarios.usuario as usuario_nome FROM sessoes "
+        "JOIN usuarios ON usuarios.id = sessoes.usuario_id WHERE token=?",
+        (token,),
+    ).fetchone()
+    if not row:
+        return None
+    if row["expira_em"] and row["expira_em"] < datetime.now().isoformat():
+        return None
+    return row
+
+
+def _extrair_token(handler, query):
+    """O token vem no header Authorization (uso normal, pelo app.js) OU
+    como ?token= na URL - usado só pelos links de impressão, que abrem numa
+    aba nova e não conseguem mandar cabeçalho customizado."""
+    auth = handler.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    if query.get("token"):
+        return query["token"][0]
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -866,27 +968,84 @@ ROUTES = []
 HTML_ROUTES = []
 
 
-def route(method, pattern):
+def route(method, pattern, publico=False):
     regex = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern) + "$")
 
     def decorator(fn):
-        ROUTES.append((method, regex, fn))
+        ROUTES.append((method, regex, fn, publico))
         return fn
 
     return decorator
 
 
-def route_html(method, pattern):
+def route_html(method, pattern, publico=False):
     """Rotas que retornam uma pagina HTML pronta para impressao (em vez de
     JSON) - usadas para a Ficha da gestante, Solicitacao de exames e
-    Orientacoes de Papanicolau."""
+    Orientacoes de Papanicolau. Continuam exigindo login (publico=False por
+    padrao), mas como abrem numa aba nova sem poder mandar o header
+    Authorization, o token tambem e aceito via ?token= na URL (ver
+    _extrair_token)."""
     regex = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern) + "$")
 
     def decorator(fn):
-        HTML_ROUTES.append((method, regex, fn))
+        HTML_ROUTES.append((method, regex, fn, publico))
         return fn
 
     return decorator
+
+
+# ---- Login / conta -----------------------------------------------------
+
+@route("POST", "/api/login", publico=True)
+def login(handler, params, body, query):
+    usuario = (body.get("usuario") or "").strip()
+    senha = body.get("senha") or ""
+    if not usuario or not senha:
+        return 400, {"erro": "Informe usuário e senha."}
+    conn = get_db()
+    _ensure_admin_default(conn)
+    row = conn.execute("SELECT * FROM usuarios WHERE usuario=?", (usuario,)).fetchone()
+    if not row or not _verificar_senha(senha, row["senha_hash"], row["senha_salt"]):
+        conn.close()
+        return 401, {"erro": "Usuário ou senha inválidos."}
+    token = _criar_sessao(conn, row["id"])
+    conn.close()
+    return 200, {"token": token, "usuario": row["usuario"]}
+
+
+@route("POST", "/api/logout")
+def logout(handler, params, body, query):
+    token = _extrair_token(handler, query)
+    conn = get_db()
+    if token:
+        conn.execute("DELETE FROM sessoes WHERE token=?", (token,))
+        conn.commit()
+    conn.close()
+    return 200, {"ok": True}
+
+
+@route("POST", "/api/trocar-senha")
+def trocar_senha(handler, params, body, query):
+    token = _extrair_token(handler, query)
+    conn = get_db()
+    sessao = _validar_token(conn, token)
+    if not sessao:
+        conn.close()
+        return 401, {"erro": "Sessão inválida."}
+    senha_atual = body.get("senha_atual") or ""
+    senha_nova = body.get("senha_nova") or ""
+    if len(senha_nova) < 6:
+        conn.close()
+        return 400, {"erro": "A nova senha precisa ter pelo menos 6 caracteres."}
+    usuario_row = conn.execute("SELECT * FROM usuarios WHERE id=?", (sessao["usuario_id"],)).fetchone()
+    if not _verificar_senha(senha_atual, usuario_row["senha_hash"], usuario_row["senha_salt"]):
+        conn.close()
+        return 401, {"erro": "Senha atual incorreta."}
+    novo_hash, novo_salt = _hash_senha(senha_nova)
+    conn.execute("UPDATE usuarios SET senha_hash=?, senha_salt=? WHERE id=?", (novo_hash, novo_salt, usuario_row["id"]))
+    conn.commit()
+    conn.close()
+    return 200, {"ok": True}
 
 
 # ---- Gestantes -------------------------------------------------------------
@@ -964,7 +1123,7 @@ def create_gestante(handler, params, body, query):
     return 201, enrich_gestante(row)
 
 
-@route("GET", "/api/verificar-email")
+@route("GET", "/api/verificar-email", publico=True)
 def verificar_email(handler, params, body, query):
     token = (query.get("token") or [None])[0]
     if not token:
@@ -1743,12 +1902,12 @@ def criar_pagamento_evento(handler, params, body, query):
     return 200, {"checkout_url": checkout_url, "preference_id": preference_id}
 
 
-@route("POST", "/api/pagamentos/webhook")
+@route("POST", "/api/pagamentos/webhook", publico=True)
 def pagamento_webhook_post(handler, params, body, query):
     return _processar_webhook_pagamento(body, query)
 
 
-@route("GET", "/api/pagamentos/webhook")
+@route("GET", "/api/pagamentos/webhook", publico=True)
 def pagamento_webhook_get(handler, params, body, query):
     return _processar_webhook_pagamento({}, query)
 
@@ -2001,7 +2160,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -2011,9 +2170,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _autenticado(self, query):
+        conn = get_db()
+        sessao = _validar_token(conn, _extrair_token(self, query))
+        conn.close()
+        return sessao is not None
 
     def _dispatch(self, method):
         parsed = urlparse(self.path)
@@ -2029,11 +2195,14 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 body = {}
 
-        for m, regex, fn in HTML_ROUTES:
+        for m, regex, fn, publico in HTML_ROUTES:
             if m != method:
                 continue
             match = regex.match(path)
             if match:
+                if not publico and not self._autenticado(query):
+                    self._send_html(401, "<h1>401 — Faça login</h1><p>Sua sessão expirou ou você não está autenticado.</p>")
+                    return
                 try:
                     status, html = fn(self, match.groupdict(), body, query)
                 except Exception as e:  # noqa
@@ -2042,11 +2211,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_html(status, html)
                 return
 
-        for m, regex, fn in ROUTES:
+        for m, regex, fn, publico in ROUTES:
             if m != method:
                 continue
             match = regex.match(path)
             if match:
+                if not publico and not self._autenticado(query):
+                    self._send(401, {"erro": "Não autenticado. Faça login novamente."})
+                    return
                 try:
                     status, payload = fn(self, match.groupdict(), body, query)
                 except Exception as e:  # noqa
@@ -2072,7 +2244,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def log_message(self, fmt, *args):
