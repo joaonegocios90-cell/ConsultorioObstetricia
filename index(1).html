@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Graziela Freitas — Enfermeira Obstetra</title>
+<link rel="icon" type="image/png" href="logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Endereço da API em produção. Rodando localmente (frontend e backend na
+     mesma máquina), deixe como está — o app.js detecta sozinho. Ao publicar
+     o frontend separado do backend (ex: Cloudflare Pages + Render/Railway),
+     defina a URL completa do backend aqui, terminando em /api. Exemplo:
+     window.API_BASE_OVERRIDE = "https://nascer-obstetrico-api.onrender.com/api"; -->
+<script>
+  window.API_BASE_OVERRIDE = "https://consultorioobstetricia.onrender.com/api";
+</script>
+
+<!-- React (via CDN, versões fixas e estáveis). app.js já vem pré-compilado
+     (sem JSX), então NÃO depende de Babel no navegador — carrega mais rápido
+     e não trava por causa de antivírus/firewall bloqueando o Babel. -->
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+<!-- Google Maps Places API — usado no campo de Endereço para autocompletar
+     endereços em tempo real. IMPORTANTE: essa chave está visível no código-fonte
+     (é assim que a Places API funciona no navegador) — restrinja-a no Google
+     Cloud Console (Credenciais > sua chave > Restrições de aplicativo > sites
+     HTTP) para aceitar apenas o domínio do seu site, evitando uso indevido por
+     terceiros. -->
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCUk-WU1NkPLjR54sFjJDsLftB5VMBqfUs&libraries=places"></script>
+
+<script src="app.js"></script>
+</body>
+</html>

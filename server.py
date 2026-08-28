@@ -313,7 +313,8 @@ CREATE TABLE IF NOT EXISTS tipos_consulta (
     nome TEXT NOT NULL,
     preco REAL,
     limite_diario INTEGER,
-    ativo INTEGER DEFAULT 1
+    ativo INTEGER DEFAULT 1,
+    sexo_alvo TEXT DEFAULT 'ambos'
 );
 
 CREATE TABLE IF NOT EXISTS horario_funcionamento (
@@ -427,6 +428,9 @@ MIGRACOES = [
     ("gestantes", "altura", "REAL"),
     ("gestantes", "filhos_vivos", "INTEGER DEFAULT 0"),
     ("gestantes", "avaliacao_inicial", "TEXT DEFAULT '{}'"),
+    ("gestantes", "sexo", "TEXT DEFAULT 'feminino'"),
+    ("gestantes", "tipo_consulta_id", "INTEGER"),
+    ("tipos_consulta", "sexo_alvo", "TEXT DEFAULT 'ambos'"),
     ("prenatal_consultas", "fc", "REAL"),
     ("prenatal_consultas", "fr", "REAL"),
     ("prenatal_consultas", "temperatura", "REAL"),
@@ -570,7 +574,7 @@ def _ensure_tipos_consulta_default(conn):
         return
     for nome in ["consulta", "ultrassom", "exame", "retorno", "vacina"]:
         conn.execute(
-            "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo) VALUES (?,?,?,1)",
+            "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo, sexo_alvo) VALUES (?,?,?,1,'ambos')",
             (nome, None, None),
         )
     conn.commit()
@@ -1064,15 +1068,19 @@ def _criar_gestante(conn, body, enviar_verificacao=True):
     recem-criada (como um dict). Nao fecha a conexao (quem chamou decide)."""
     email = body.get("email")
     verify_token = secrets.token_urlsafe(24) if email else None
+    sexo = body.get("sexo") or "feminino"
+    status = body.get("status", "gestante")
+    if sexo == "masculino":
+        status = "paciente"
     cur = conn.execute(
         """INSERT INTO gestantes
         (nome, data_nascimento, cpf, telefone, endereco, convenio, tipo_sanguineo,
          num_gestacoes, num_partos_normais, num_cesareas, num_abortos,
          alergias, doencas_preexistentes, medicamentos_uso, dum, condicoes_risco,
-         status, criado_em, email, email_verificado, email_verify_token,
+         status, sexo, tipo_consulta_id, criado_em, email, email_verificado, email_verify_token,
          estado_civil, profissao, pessoa_referencia, telefone_referencia, altura,
          filhos_vivos, avaliacao_inicial)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         RETURNING id""",
         (
             body.get("nome"),
@@ -1091,7 +1099,9 @@ def _criar_gestante(conn, body, enviar_verificacao=True):
             body.get("medicamentos_uso"),
             body.get("dum"),
             json.dumps(body.get("condicoes_risco", [])),
-            body.get("status", "gestante"),
+            status,
+            sexo,
+            body.get("tipo_consulta_id"),
             datetime.now().isoformat(),
             email,
             0,
@@ -1196,11 +1206,13 @@ def update_gestante(handler, params, body, query):
     fields = ["nome", "data_nascimento", "cpf", "telefone", "endereco", "convenio",
               "tipo_sanguineo", "num_gestacoes", "num_partos_normais", "num_cesareas",
               "num_abortos", "alergias", "doencas_preexistentes", "medicamentos_uso",
-              "dum", "status", "antecedentes_clinicos", "antecedentes_cirurgicos",
+              "dum", "status", "sexo", "tipo_consulta_id", "antecedentes_clinicos", "antecedentes_cirurgicos",
               "antecedentes_familiares", "habitos", "anamnese", "email",
               "estado_civil", "profissao", "pessoa_referencia", "telefone_referencia",
               "altura", "filhos_vivos"]
     updates = {f: body[f] for f in fields if f in body}
+    if updates.get("sexo") == "masculino":
+        updates["status"] = "paciente"
     if "condicoes_risco" in body:
         updates["condicoes_risco"] = json.dumps(body["condicoes_risco"])
     if "avaliacao_inicial" in body:
@@ -1485,6 +1497,15 @@ def imprimir_ficha(handler, params, body, query):
         cls = "on" if av.get(key) else ""
         return f'<div class="check"><span class="box {cls}"></span>{label}: {sn(key)}</div>'
 
+    # O título e as seções da ficha impressa seguem exatamente o que foi
+    # cadastrado: sexo define se as seções femininas/obstétricas aparecem,
+    # e o status (gestante/puérpera/paciente) define o título.
+    feminino = (g.get("sexo") or "feminino") != "masculino"
+    titulo_ficha = ("Ficha da Paciente" if not feminino else {
+        "gestante": "Ficha da Gestante",
+        "puerperio": "Ficha da Puérpera",
+    }.get(g.get("status"), "Ficha da Paciente"))
+
     linhas_consulta = "".join(
         f"<tr><td>{_fmt_data_br(c.get('data'))}</td><td>{(c.get('peso') or '—')} kg</td>"
         f"<td>{c.get('pressao_arterial') or '—'}</td><td>{(c.get('altura_uterina') or '—')} cm</td>"
@@ -1492,12 +1513,11 @@ def imprimir_ficha(handler, params, body, query):
         for c in consultas
     ) or '<tr><td colspan="6" style="text-align:center;color:#999;">Nenhuma consulta registrada ainda.</td></tr>'
 
-    corpo = f"""
-    <h2 class="doc-title">Ficha da Gestante</h2>
-    <div class="section">
-      <div class="section-title">1. Identificação</div>
+    secoes = [
+        ("Identificação", f"""
       <div class="row">
         {_campo("Nome", g.get("nome"))}
+        {_campo("Sexo", "Feminino" if feminino else "Masculino")}
         {_campo("Data de nascimento", _fmt_data_br(g.get("data_nascimento")))}
         {_campo("Idade", g["idade"]["texto"] if g.get("idade") else "—")}
         {_campo("Estado civil", g.get("estado_civil"))}
@@ -1510,9 +1530,11 @@ def imprimir_ficha(handler, params, body, query):
         {_campo("Pessoa de referência", g.get("pessoa_referencia"))}
         {_campo("Telefone de referência", g.get("telefone_referencia"))}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">2. Dados obstétricos</div>
+    """, True),
+    ]
+
+    if feminino:
+        secoes.append(("Dados obstétricos", f"""
       <div class="row">
         {_campo("Gesta (G)", g.get("num_gestacoes"))}
         {_campo("Partos normais (P)", g.get("num_partos_normais"))}
@@ -1525,9 +1547,8 @@ def imprimir_ficha(handler, params, body, query):
         {_campo("Tipo sanguíneo", g.get("tipo_sanguineo"))}
         {_campo("Altura", f"{g['altura']} m" if g.get("altura") else "—")}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">3. Histórico ginecológico</div>
+    """, True))
+        secoes.append(("Histórico ginecológico", f"""
       <div class="row">
         {_campo("Menarca", av.get("menarca"))}
         {_campo("Ciclo menstrual", av.get("ciclo_menstrual"))}
@@ -1536,9 +1557,16 @@ def imprimir_ficha(handler, params, body, query):
         {_campo("Histórico de ISTs", av.get("historico_ists"))}
         {_campo("Teste de gravidez", av.get("teste_gravidez"))}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">4. Antecedentes pessoais e hábitos</div>
+    """, True))
+    else:
+        secoes.append(("Tipo sanguíneo e altura", f"""
+      <div class="row">
+        {_campo("Tipo sanguíneo", g.get("tipo_sanguineo"))}
+        {_campo("Altura", f"{g['altura']} m" if g.get("altura") else "—")}
+      </div>
+    """, True))
+
+    secoes.append(("Antecedentes pessoais e hábitos", f"""
       <div class="checklist">
         {chk("hipertensao", "Hipertensão")}
         {chk("diabetes", "Diabetes")}
@@ -1558,17 +1586,18 @@ def imprimir_ficha(handler, params, body, query):
         {_campo("Cirurgias anteriores", g.get("antecedentes_cirurgicos"))}
         {_campo("Medicamentos em uso", g.get("medicamentos_uso"))}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">5. Histórico familiar</div>
+    """, True))
+
+    secoes.append(("Histórico familiar", f"""
       <div class="checklist">
         {chk("hist_fam_gemeos", "Gêmeos na família")}
         {chk("hist_fam_malformacoes", "Malformações congênitas")}
         {chk("hist_fam_doencas_geneticas", "Doenças genéticas")}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">6. Gestações anteriores</div>
+    """, True))
+
+    if feminino:
+        secoes.append(("Gestações anteriores", f"""
       <div class="checklist">
         {chk("complicacoes_gestacao_anterior", "Complicações em gestação anterior")}
         {chk("complicacoes_parto_anterior", "Complicações em parto anterior")}
@@ -1578,20 +1607,31 @@ def imprimir_ficha(handler, params, body, query):
         {chk("drogas_gestacao_anterior", "Uso de drogas em gestação anterior")}
         {chk("aborto_provocado_anterior", "Aborto provocado anterior")}
       </div>
-    </div>
-    <div class="section">
-      <div class="section-title">7. Controle das consultas</div>
+    """, True))
+        secoes.append(("Controle das consultas", f"""
       <table>
         <thead><tr><th>Data</th><th>Peso</th><th>PA</th><th>Alt. uterina</th><th>BCF</th><th>Queixas/Observações</th></tr></thead>
         <tbody>{linhas_consulta}</tbody>
       </table>
-    </div>
+    """, True))
+
+    corpo_secoes = "".join(
+        f"""<div class="section">
+      <div class="section-title">{i}. {titulo}</div>
+      {html}
+    </div>"""
+        for i, (titulo, html, ativo) in enumerate(secoes, start=1) if ativo
+    )
+
+    corpo = f"""
+    <h2 class="doc-title">{titulo_ficha}</h2>
+    {corpo_secoes}
     <div class="assinatura">
       <div class="linha"></div>
       Assinatura e carimbo — {CLINICA_PROFISSIONAL} ({CLINICA_COREN})
     </div>
     """
-    return 200, _print_shell(f"Ficha da Gestante — {g.get('nome')}", corpo)
+    return 200, _print_shell(f"{titulo_ficha} — {g.get('nome')}", corpo)
 
 
 @route_html("GET", "/api/gestantes/{id}/solicitacoes-exames/{sid}/imprimir")
@@ -1693,10 +1733,13 @@ def create_tipo_consulta(handler, params, body, query):
     nome = (body.get("nome") or "").strip()
     if not nome:
         return 400, {"erro": "Nome do tipo de consulta é obrigatório."}
+    sexo_alvo = body.get("sexo_alvo") or "ambos"
+    if sexo_alvo not in ("feminino", "masculino", "ambos"):
+        sexo_alvo = "ambos"
     conn = get_db()
     cur = conn.execute(
-        "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo) VALUES (?,?,?,?) RETURNING id",
-        (nome, body.get("preco"), body.get("limite_diario"), 1 if body.get("ativo", True) else 0),
+        "INSERT INTO tipos_consulta (nome, preco, limite_diario, ativo, sexo_alvo) VALUES (?,?,?,?,?) RETURNING id",
+        (nome, body.get("preco"), body.get("limite_diario"), 1 if body.get("ativo", True) else 0, sexo_alvo),
     )
     new_id = cur.fetchone()["id"]
     conn.commit()
@@ -1708,10 +1751,12 @@ def create_tipo_consulta(handler, params, body, query):
 @route("PUT", "/api/tipos-consulta/{id}")
 def update_tipo_consulta(handler, params, body, query):
     conn = get_db()
-    fields = ["nome", "preco", "limite_diario", "ativo"]
+    fields = ["nome", "preco", "limite_diario", "ativo", "sexo_alvo"]
     updates = {f: body[f] for f in fields if f in body}
     if "ativo" in updates:
         updates["ativo"] = 1 if updates["ativo"] else 0
+    if "sexo_alvo" in updates and updates["sexo_alvo"] not in ("feminino", "masculino", "ambos"):
+        updates["sexo_alvo"] = "ambos"
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(f"UPDATE tipos_consulta SET {set_clause} WHERE id=?", (*updates.values(), params["id"]))
