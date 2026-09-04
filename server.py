@@ -16,6 +16,7 @@ import base64
 import calendar
 import hashlib
 import hmac
+import io
 import json
 import re
 import secrets
@@ -30,6 +31,17 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urlencode
 import os
+
+# fpdf2 gera o PDF do relatório de faturamento para download. Import
+# protegido (com try/except) pra o resto do sistema continuar funcionando
+# normalmente mesmo se, por algum motivo, a dependência não tiver sido
+# instalada no deploy — só a rota de exportar PDF fica indisponível nesse caso.
+try:
+    from fpdf import FPDF
+    from fpdf.fonts import FontFace
+except ImportError:
+    FPDF = None
+    FontFace = None
 
 # Por padrão o banco é um arquivo SQLite na pasta do projeto — funciona sem
 # nenhuma dependência externa, ótimo para rodar localmente ou numa VPS com
@@ -2345,39 +2357,147 @@ def imprimir_faturamento(handler, params, body, query):
     return 200, _print_shell("Relatório de Faturamento", corpo)
 
 
+def _pdf_safe(txt):
+    """As fontes padrão do fpdf2 (helvetica) só cobrem Latin-1 — travessão
+    "—", "·" e afins (ou qualquer caractere/emoji digitado num campo livre,
+    tipo nome da paciente) quebrariam a geração do PDF. Troca qualquer
+    caractere fora do Latin-1 por "?" em vez de deixar o relatório falhar."""
+    if txt is None:
+        return ""
+    return str(txt).encode("latin-1", "replace").decode("latin-1")
+
+
+class _FaturamentoPDF(FPDF if FPDF else object):
+    """Timbrado com logo em marca d'água e rodapé repetidos automaticamente
+    em toda página (inclusive quando a tabela de atendimentos precisa
+    quebrar em mais de uma página)."""
+
+    def __init__(self, logo_bytes):
+        super().__init__(format="A4")
+        self._logo_bytes = logo_bytes
+        self.set_auto_page_break(auto=True, margin=20)
+
+    def header(self):
+        if self._logo_bytes:
+            try:
+                with self.local_context(fill_opacity=0.06):
+                    self.image(io.BytesIO(self._logo_bytes), x=35, y=70, w=140)
+            except Exception:
+                pass
+        self.set_font("helvetica", "B", 16)
+        self.set_text_color(194, 24, 91)
+        self.cell(0, 8, _pdf_safe(CLINICA_NOME), new_x="LMARGIN", new_y="NEXT")
+        self.set_font("helvetica", "", 9)
+        self.set_text_color(85, 85, 85)
+        self.cell(0, 5, _pdf_safe(f"{CLINICA_CARGO} - {CLINICA_PROFISSIONAL} - {CLINICA_COREN}"), new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(0, 0, 0)
+        self.set_draw_color(194, 24, 91)
+        self.set_line_width(0.6)
+        y = self.get_y() + 2
+        self.line(10, y, 200, y)
+        self.set_y(y + 4)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("helvetica", "I", 8)
+        self.set_text_color(150, 150, 150)
+        self.cell(0, 10, _pdf_safe(f"Documento gerado pelo sistema NASCER - {CLINICA_NOME} - Página {self.page_no()}"), align="C")
+
+
+def _gerar_pdf_faturamento(d):
+    if FPDF is None:
+        raise Exception("Geração de PDF indisponível: dependência \"fpdf2\" não está instalada no servidor.")
+
+    logo_bytes = base64.b64decode(LOGO_BASE64) if LOGO_BASE64 else None
+    pdf = _FaturamentoPDF(logo_bytes)
+    pdf.add_page()
+
+    def moeda(v):
+        return f"R$ {v:.2f}".replace(".", ",")
+
+    pdf.set_font("helvetica", "B", 13)
+    pdf.set_text_color(0, 121, 107)
+    pdf.cell(0, 8, "Relatório de Faturamento", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(2)
+
+    filtros_txt = []
+    if d["inicio"] and d["fim"]:
+        filtros_txt.append(f'Período: {_fmt_data_br(d["inicio"])} a {_fmt_data_br(d["fim"])}')
+    if d["tipo"]:
+        filtros_txt.append(f'Tipo de consulta: {d["tipo"]}')
+    if d["status_pagamento"]:
+        status_map = {"pago": "Pago", "pendente": "Pendente", "nao_aplicavel": "Não aplicável"}
+        filtros_txt.append(f'Status de pagamento: {status_map.get(d["status_pagamento"], d["status_pagamento"])}')
+    pdf.set_font("helvetica", "", 9)
+    pdf.set_text_color(100, 100, 100)
+    pdf.multi_cell(0, 5, _pdf_safe(" | ".join(filtros_txt)) if filtros_txt else "Todos os atendimentos")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(3)
+
+    resumo = d["resumo"]
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(0, 7, "Resumo", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(95, 6, f'Recebido no período: {moeda(resumo["total_pago"])}')
+    pdf.cell(95, 6, f'A receber (pendente): {moeda(resumo["total_pendente"])}', new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(95, 6, f'Total geral: {moeda(resumo["total_geral"])}')
+    pdf.cell(95, 6, f'Atendimentos: {resumo["qtd"]}', new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    titulo_style = FontFace(emphasis="BOLD", fill_color=(253, 241, 245), color=(194, 24, 91))
+
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(0, 7, "Faturamento por mês", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 9)
+    if d["por_mes"]:
+        with pdf.table(col_widths=(35, 35, 35, 35, 30), text_align="LEFT", headings_style=titulo_style) as table:
+            row = table.row()
+            for h in ["Mês", "Recebido", "Pendente", "Total", "Atendimentos"]:
+                row.cell(h)
+            for m in d["por_mes"]:
+                row = table.row()
+                row.cell(f"{_MESES_PT[int(m['mes'][5:7]) - 1].capitalize()}/{m['mes'][:4]}")
+                row.cell(moeda(m["pago"]))
+                row.cell(moeda(m["pendente"]))
+                row.cell(moeda(m["pago"] + m["pendente"]))
+                row.cell(str(m["qtd_total"]))
+    else:
+        pdf.set_font("helvetica", "I", 9)
+        pdf.cell(0, 6, "Nenhum atendimento no período.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(0, 7, "Atendimentos no período", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "", 9)
+    if d["eventos"]:
+        status_map = {"pago": "Pago", "pendente": "Pendente"}
+        with pdf.table(col_widths=(25, 60, 35, 30, 20), text_align="LEFT", headings_style=titulo_style) as table:
+            row = table.row()
+            for h in ["Data", "Paciente", "Tipo", "Valor", "Status"]:
+                row.cell(h)
+            for e in d["eventos"]:
+                row = table.row()
+                row.cell(_fmt_data_br((e.get("data_hora") or "").split("T")[0]))
+                row.cell(_pdf_safe(e.get("gestante_nome") or "-")[:42])
+                row.cell(_pdf_safe((e.get("tipo") or "-").capitalize()))
+                row.cell(moeda(e["valor"]) if e.get("valor") is not None else "-")
+                row.cell(status_map.get(e.get("status_pagamento"), "-"))
+    else:
+        pdf.set_font("helvetica", "I", 9)
+        pdf.cell(0, 6, "Nenhum atendimento no período.", new_x="LMARGIN", new_y="NEXT")
+
+    return bytes(pdf.output())
+
+
 @route_csv("GET", "/api/faturamento/exportar")
-def exportar_faturamento_csv(handler, params, body, query):
-    """CSV do faturamento (mesmos filtros da tela/impressão), pra abrir no
-    Excel. Usa ; como separador e , como decimal, no padrão do Excel em
-    português do Brasil."""
+def exportar_faturamento_pdf(handler, params, body, query):
+    """PDF do relatório de faturamento (mesmos filtros da tela/impressão),
+    com o timbrado e a marca d'água do consultório."""
     d = _calcular_faturamento(query)
-    status_pag_label = {"pago": "Pago", "pendente": "Pendente", "nao_aplicavel": "Não aplicável"}
-
-    def valor_csv(v):
-        return f"{v:.2f}".replace(".", ",") if v is not None else ""
-
-    def campo_csv(txt):
-        return (txt or "").replace(";", ",").replace("\n", " ").replace("\r", " ")
-
-    linhas = ["Data;Paciente;Tipo;Valor;Status de pagamento"]
-    for e in d["eventos"]:
-        data = _fmt_data_br((e.get("data_hora") or "").split("T")[0])
-        linhas.append(";".join([
-            data,
-            campo_csv(e.get("gestante_nome")),
-            campo_csv((e.get("tipo") or "").capitalize()),
-            valor_csv(e.get("valor")),
-            status_pag_label.get(e.get("status_pagamento"), ""),
-        ]))
-
-    linhas.append("")
-    linhas.append(f";;;Total recebido;{valor_csv(d['resumo']['total_pago'])}")
-    linhas.append(f";;;Total pendente;{valor_csv(d['resumo']['total_pendente'])}")
-    linhas.append(f";;;Total geral;{valor_csv(d['resumo']['total_geral'])}")
-
-    csv_text = "\n".join(linhas)
-    nome_arquivo = f"faturamento_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-    return 200, nome_arquivo, csv_text
+    conteudo = _gerar_pdf_faturamento(d)
+    nome_arquivo = f"faturamento_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+    return 200, nome_arquivo, conteudo
 
 
 @route("GET", "/api/dashboard")
@@ -2462,12 +2582,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_csv(self, status, filename, csv_text):
-        # BOM UTF-8 no começo pra o Excel (bem comum no Brasil) reconhecer a
-        # codificação e mostrar os acentos certinho ao abrir o arquivo.
-        body = ("﻿" + csv_text).encode("utf-8")
+    def _send_arquivo(self, status, filename, conteudo):
+        """Envia um arquivo para download (Content-Disposition: attachment).
+        Se `conteudo` já vier em bytes (ex: PDF), manda direto; se vier como
+        texto (ex: CSV), adiciona o BOM UTF-8 no começo pra o Excel (comum no
+        Brasil) reconhecer a codificação e mostrar os acentos certinho."""
+        if isinstance(conteudo, bytes):
+            body = conteudo
+            content_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
+        else:
+            body = ("﻿" + conteudo).encode("utf-8")
+            content_type = "text/csv; charset=utf-8"
         self.send_response(status)
-        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -2520,11 +2647,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(401, {"erro": "Não autenticado. Faça login novamente."})
                     return
                 try:
-                    status, filename, csv_text = fn(self, match.groupdict(), body, query)
+                    status, filename, conteudo = fn(self, match.groupdict(), body, query)
                 except Exception as e:  # noqa
                     self._send(500, {"erro": str(e)})
                     return
-                self._send_csv(status, filename, csv_text)
+                self._send_arquivo(status, filename, conteudo)
                 return
 
         for m, regex, fn, publico in ROUTES:

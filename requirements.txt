@@ -1,4 +1,9 @@
-# Dependências opcionais — só são necessárias se o sistema for rodar com
-# Postgres (variável de ambiente DATABASE_URL definida, ex: Supabase).
-# Rodando localmente com SQLite (padrão), nada aqui precisa ser instalado.
+# fpdf2 gera o PDF do relatório de faturamento (botão "Baixar"). Dependência
+# obrigatória — sem ela, o sistema continua funcionando normalmente, só a
+# exportação em PDF fica indisponível.
+fpdf2
+
+# Dependência opcional — só é necessária se o sistema for rodar com Postgres
+# (variável de ambiente DATABASE_URL definida, ex: Supabase). Rodando
+# localmente com SQLite (padrão), essa linha pode ser ignorada.
 psycopg2-binary
