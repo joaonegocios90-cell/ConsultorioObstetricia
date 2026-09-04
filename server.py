@@ -1014,6 +1014,23 @@ def route_html(method, pattern, publico=False):
     return decorator
 
 
+CSV_ROUTES = []
+
+
+def route_csv(method, pattern, publico=False):
+    """Rotas que devolvem um arquivo para download (ex: exportar faturamento
+    em CSV) em vez de JSON ou HTML. Mesma regra de autenticação via ?token=
+    das rotas de impressão, já que o download também é feito com
+    window.open()/link direto."""
+    regex = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern) + "$")
+
+    def decorator(fn):
+        CSV_ROUTES.append((method, regex, fn, publico))
+        return fn
+
+    return decorator
+
+
 # ---- Login / conta -----------------------------------------------------
 
 @route("POST", "/api/login", publico=True)
@@ -2328,6 +2345,41 @@ def imprimir_faturamento(handler, params, body, query):
     return 200, _print_shell("Relatório de Faturamento", corpo)
 
 
+@route_csv("GET", "/api/faturamento/exportar")
+def exportar_faturamento_csv(handler, params, body, query):
+    """CSV do faturamento (mesmos filtros da tela/impressão), pra abrir no
+    Excel. Usa ; como separador e , como decimal, no padrão do Excel em
+    português do Brasil."""
+    d = _calcular_faturamento(query)
+    status_pag_label = {"pago": "Pago", "pendente": "Pendente", "nao_aplicavel": "Não aplicável"}
+
+    def valor_csv(v):
+        return f"{v:.2f}".replace(".", ",") if v is not None else ""
+
+    def campo_csv(txt):
+        return (txt or "").replace(";", ",").replace("\n", " ").replace("\r", " ")
+
+    linhas = ["Data;Paciente;Tipo;Valor;Status de pagamento"]
+    for e in d["eventos"]:
+        data = _fmt_data_br((e.get("data_hora") or "").split("T")[0])
+        linhas.append(";".join([
+            data,
+            campo_csv(e.get("gestante_nome")),
+            campo_csv((e.get("tipo") or "").capitalize()),
+            valor_csv(e.get("valor")),
+            status_pag_label.get(e.get("status_pagamento"), ""),
+        ]))
+
+    linhas.append("")
+    linhas.append(f";;;Total recebido;{valor_csv(d['resumo']['total_pago'])}")
+    linhas.append(f";;;Total pendente;{valor_csv(d['resumo']['total_pendente'])}")
+    linhas.append(f";;;Total geral;{valor_csv(d['resumo']['total_geral'])}")
+
+    csv_text = "\n".join(linhas)
+    nome_arquivo = f"faturamento_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+    return 200, nome_arquivo, csv_text
+
+
 @route("GET", "/api/dashboard")
 def dashboard(handler, params, body, query):
     conn = get_db()
@@ -2410,6 +2462,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_csv(self, status, filename, csv_text):
+        # BOM UTF-8 no começo pra o Excel (bem comum no Brasil) reconhecer a
+        # codificação e mostrar os acentos certinho ao abrir o arquivo.
+        body = ("﻿" + csv_text).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _autenticado(self, query):
         conn = get_db()
         sessao = _validar_token(conn, _extrair_token(self, query))
@@ -2444,6 +2509,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_html(500, f"<h1>Erro</h1><p>{e}</p>")
                     return
                 self._send_html(status, html)
+                return
+
+        for m, regex, fn, publico in CSV_ROUTES:
+            if m != method:
+                continue
+            match = regex.match(path)
+            if match:
+                if not publico and not self._autenticado(query):
+                    self._send(401, {"erro": "Não autenticado. Faça login novamente."})
+                    return
+                try:
+                    status, filename, csv_text = fn(self, match.groupdict(), body, query)
+                except Exception as e:  # noqa
+                    self._send(500, {"erro": str(e)})
+                    return
+                self._send_csv(status, filename, csv_text)
                 return
 
         for m, regex, fn, publico in ROUTES:
