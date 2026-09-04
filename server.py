@@ -120,6 +120,22 @@ CLINICA_ENDERECO = os.environ.get("CLINICA_ENDERECO", "Av. Nossa Senhora Apareci
 CLINICA_TELEFONE = os.environ.get("CLINICA_TELEFONE", "(11) 93201-7000")
 CLINICA_INSTAGRAM = os.environ.get("CLINICA_INSTAGRAM", "@grazielafreitas.enfobstetra")
 
+# Logo do consultório, embutida como data URI (base64) direto no HTML dos
+# documentos impressos (ficha, solicitação de exames, orientações). Assim a
+# marca d'água funciona mesmo o backend (Render) não servindo arquivos
+# estáticos — o navegador não precisa buscar logo.png em outro domínio.
+def _carregar_logo_base64():
+    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    try:
+        with open(caminho, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except Exception as e:  # noqa
+        print(f"[logo] Não foi possível carregar logo.png para os documentos impressos: {e}")
+        return ""
+
+
+LOGO_BASE64 = _carregar_logo_base64()
+
 # --------------------------------------------------------------------------
 # Banco de dados
 # --------------------------------------------------------------------------
@@ -1428,6 +1444,27 @@ def _campo(label, value):
 
 
 def _print_shell(titulo, corpo_html):
+    marca_dagua_css = ""
+    marca_dagua_html = ""
+    if LOGO_BASE64:
+        marca_dagua_css = f"""
+  .marca-dagua {{
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    z-index: -1;
+    pointer-events: none;
+  }}
+  .marca-dagua img {{
+    width: 60%;
+    max-width: 480px;
+    opacity: 0.08;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }}
+  html {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+"""
+        marca_dagua_html = f'<div class="marca-dagua"><img src="data:image/png;base64,{LOGO_BASE64}" alt=""></div>'
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1435,7 +1472,7 @@ def _print_shell(titulo, corpo_html):
 <title>{titulo}</title>
 <style>
   * {{ box-sizing: border-box; }}
-  body {{ font-family: Arial, Helvetica, sans-serif; color: #333; max-width: 780px; margin: 24px auto; padding: 0 16px; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; color: #333; max-width: 780px; margin: 24px auto; padding: 0 16px; position: relative; }}
   .print-toolbar {{ text-align: right; margin-bottom: 12px; }}
   .print-toolbar button {{ background: #c2185b; color: #fff; border: none; padding: 9px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; }}
   .letterhead {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #c2185b; padding-bottom: 12px; margin-bottom: 18px; }}
@@ -1458,10 +1495,12 @@ def _print_shell(titulo, corpo_html):
   .assinatura {{ margin-top: 46px; text-align: center; font-size: 12.5px; }}
   .assinatura .linha {{ border-top: 1px solid #333; width: 320px; margin: 0 auto 4px; }}
   .footer-doc {{ margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 11px; color: #999; text-align: center; }}
+  .section, .letterhead, .footer-doc, table, .assinatura {{ position: relative; z-index: 1; }}
   @media print {{ .print-toolbar {{ display: none; }} body {{ margin: 0; }} }}
-</style>
+{marca_dagua_css}</style>
 </head>
 <body>
+  {marca_dagua_html}
   <div class="print-toolbar"><button onclick="window.print()">🖨️ Imprimir</button></div>
   <div class="letterhead">
     <div>
