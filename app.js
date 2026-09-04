@@ -299,6 +299,7 @@ function Sidebar({ page, onNavigate, usuarioLogado, onLogout }) {
     { key: "agenda", label: "Agenda", ic: "📅" },
     { key: "calendario", label: "Calendário", ic: "🗓️" },
     { key: "relatorios", label: "Relatórios", ic: "📈" },
+    { key: "faturamento", label: "Faturamento", ic: "💰" },
     { key: "configuracoes", label: "Configurações", ic: "⚙️" },
     { key: "sobre", label: "Sobre o sistema", ic: "ℹ️" },
   ];
@@ -1506,6 +1507,148 @@ function RelatoriosPage() {
 }
 
 // ============================================================================
+// Faturamento
+// ============================================================================
+
+function FaturamentoPage({ onOpenGestante }) {
+  const hoje = new Date();
+  const dozeAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 11, 1);
+  const isoDia = (d) => d.toISOString().slice(0, 10);
+
+  const [filtros, setFiltros] = useState({
+    inicio: isoDia(dozeAtras),
+    fim: isoDia(hoje),
+    tipo: "",
+    status_pagamento: "",
+  });
+  const [tipos, setTipos] = useState([]);
+  const [dados, setDados] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { api("/tipos-consulta").then(setTipos).catch(() => {}); }, []);
+
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    if (filtros.inicio) qs.set("inicio", filtros.inicio);
+    if (filtros.fim) qs.set("fim", filtros.fim);
+    if (filtros.tipo) qs.set("tipo", filtros.tipo);
+    if (filtros.status_pagamento) qs.set("status_pagamento", filtros.status_pagamento);
+    api(`/faturamento?${qs.toString()}`).then(setDados).catch((e) => setError(e.message));
+  }, [filtros]);
+
+  const setFiltro = (k, v) => setFiltros((f) => ({ ...f, [k]: v }));
+  const limparFiltros = () => setFiltros({ inicio: isoDia(dozeAtras), fim: isoDia(hoje), tipo: "", status_pagamento: "" });
+
+  const fmtMoeda = (v) => `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`;
+  const fmtMes = (mes) => {
+    const [ano, m] = mes.split("-");
+    return `${MESES_ABREV[parseInt(m, 10) - 1]}/${ano}`;
+  };
+
+  if (error) return React.createElement(ApiErrorBanner, { error: error });
+  if (!dados) return React.createElement("div", { className: "empty-state" }, "Carregando faturamento...");
+
+  return (
+    React.createElement("div", null,
+      React.createElement("div", { className: "topbar" },
+        React.createElement("div", null,
+          React.createElement("h2", null, "Faturamento"),
+          React.createElement("div", { className: "sub" }, "Receita por mês, com filtro de período, tipo de consulta e status de pagamento")
+        )
+      ),
+      React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+        React.createElement("div", { className: "form-grid cols-3" },
+          React.createElement(Field, { label: "De" }, React.createElement("input", { type: "date", value: filtros.inicio, onChange: (e) => setFiltro("inicio", e.target.value) })),
+          React.createElement(Field, { label: "Até" }, React.createElement("input", { type: "date", value: filtros.fim, onChange: (e) => setFiltro("fim", e.target.value) })),
+          React.createElement(Field, { label: "Tipo de consulta" },
+            React.createElement("select", { value: filtros.tipo, onChange: (e) => setFiltro("tipo", e.target.value) },
+              React.createElement("option", { value: "" }, "Todos"),
+              tipos.map((t) => React.createElement("option", { key: t.id, value: t.nome }, t.nome))
+            )
+          ),
+          React.createElement(Field, { label: "Status de pagamento" },
+            React.createElement("select", { value: filtros.status_pagamento, onChange: (e) => setFiltro("status_pagamento", e.target.value) },
+              React.createElement("option", { value: "" }, "Todos"),
+              React.createElement("option", { value: "pago" }, "Pago"),
+              React.createElement("option", { value: "pendente" }, "Pendente"),
+              React.createElement("option", { value: "nao_aplicavel" }, "Não aplicável")
+            )
+          )
+        ),
+        React.createElement("div", { style: { marginTop: 12 } },
+          React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: limparFiltros }, "Limpar filtros")
+        )
+      ),
+      React.createElement("div", { className: "grid grid-3", style: { marginBottom: 16 } },
+        React.createElement(StatCard, { icon: "✅", label: "Recebido no período", value: fmtMoeda(dados.resumo.total_pago), color: "#2e7d32" }),
+        React.createElement(StatCard, { icon: "⏳", label: "A receber (pendente)", value: fmtMoeda(dados.resumo.total_pendente), color: "#ef6c00" }),
+        React.createElement(StatCard, { icon: "📋", label: "Atendimentos no período", value: dados.resumo.qtd, color: "#00796b" })
+      ),
+      React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+        React.createElement("div", { className: "section-title" }, "Faturamento por mês"),
+        dados.por_mes.length === 0
+          ? React.createElement("div", { className: "empty-state" }, "Nenhum atendimento com valor no período selecionado.")
+          : React.createElement("table", null,
+              React.createElement("thead", null,
+                React.createElement("tr", null,
+                  React.createElement("th", null, "Mês"),
+                  React.createElement("th", null, "Recebido"),
+                  React.createElement("th", null, "Pendente"),
+                  React.createElement("th", null, "Total"),
+                  React.createElement("th", null, "Atendimentos")
+                )
+              ),
+              React.createElement("tbody", null,
+                dados.por_mes.map((m) => (
+                  React.createElement("tr", { key: m.mes },
+                    React.createElement("td", { style: { fontWeight: 700, textTransform: "capitalize" } }, fmtMes(m.mes)),
+                    React.createElement("td", null, fmtMoeda(m.pago)),
+                    React.createElement("td", null, fmtMoeda(m.pendente)),
+                    React.createElement("td", null, fmtMoeda(m.pago + m.pendente)),
+                    React.createElement("td", null, m.qtd_total)
+                  )
+                ))
+              )
+            )
+      ),
+      React.createElement("div", { className: "card" },
+        React.createElement("div", { className: "section-title" }, "Atendimentos no período"),
+        dados.eventos.length === 0
+          ? React.createElement("div", { className: "empty-state" }, "Nenhum atendimento encontrado com esses filtros.")
+          : React.createElement("table", null,
+              React.createElement("thead", null,
+                React.createElement("tr", null,
+                  React.createElement("th", null, "Data"),
+                  React.createElement("th", null, "Paciente"),
+                  React.createElement("th", null, "Tipo"),
+                  React.createElement("th", null, "Valor"),
+                  React.createElement("th", null, "Status")
+                )
+              ),
+              React.createElement("tbody", null,
+                dados.eventos.map((e) => (
+                  React.createElement("tr", { key: e.id, onClick: () => e.gestante_id && onOpenGestante && onOpenGestante(e.gestante_id) },
+                    React.createElement("td", null, fmtDateTime(e.data_hora)),
+                    React.createElement("td", null, e.gestante_nome || "—"),
+                    React.createElement("td", { style: { textTransform: "capitalize" } }, e.tipo || "—"),
+                    React.createElement("td", null, e.valor != null ? fmtMoeda(e.valor) : "—"),
+                    React.createElement("td", null,
+                      e.status_pagamento === "pago"
+                        ? React.createElement("span", { className: "badge badge-ok" }, "Pago")
+                        : e.status_pagamento === "pendente"
+                          ? React.createElement("span", { className: "badge badge-warn" }, "Pendente")
+                          : React.createElement("span", { className: "badge badge-neutral" }, "—")
+                    )
+                  )
+                ))
+              )
+            )
+      )
+    )
+  );
+}
+
+// ============================================================================
 // Configurações do consultório (horário de funcionamento e tipos de consulta)
 // ============================================================================
 
@@ -1780,7 +1923,7 @@ function App({ usuarioLogado, onLogout }) {
   const navigateGestantes = (filtro) => { setGestantesFiltroInicial(filtro); setGestanteId(null); setPage("gestantes"); };
 
   return (
-    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate, usuarioLogado: usuarioLogado, onLogout: onLogout }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "configuracoes" && React.createElement(ConfiguracoesPage, null), page === "sobre" && React.createElement(SobrePage, null)))
+    React.createElement("div", { className: "app-shell" }, React.createElement(Sidebar, { page: page, onNavigate: navigate, usuarioLogado: usuarioLogado, onLogout: onLogout }), React.createElement("div", { className: "main" }, page === "dashboard" && React.createElement(DashboardPage, { onOpenGestante: openGestante, onNavigateGestantes: navigateGestantes, onNavigate: navigate }), page === "gestantes" && React.createElement(GestantesListPage, { onOpenGestante: openGestante, initialFiltro: gestantesFiltroInicial }), page === "cadastros" && React.createElement(CadastroPage, { onSaved: openGestante, onCancel: () => navigate("gestantes") }), page === "gestante-detail" && React.createElement(GestanteDetailPage, { gestanteId: gestanteId, onBack: () => navigate("gestantes") }), page === "agenda" && React.createElement(AgendaPage, null), page === "calendario" && React.createElement(CalendarioPage, null), page === "relatorios" && React.createElement(RelatoriosPage, null), page === "faturamento" && React.createElement(FaturamentoPage, { onOpenGestante: openGestante }), page === "configuracoes" && React.createElement(ConfiguracoesPage, null), page === "sobre" && React.createElement(SobrePage, null)))
   );
 }
 

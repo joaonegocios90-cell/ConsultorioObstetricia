@@ -2138,6 +2138,76 @@ def relatorios(handler, params, body, query):
     }
 
 
+@route("GET", "/api/faturamento")
+def faturamento(handler, params, body, query):
+    """Faturamento com filtros de período, tipo de consulta e status de
+    pagamento. Sem filtro de período, olha os últimos 12 meses por padrão."""
+    conn = get_db()
+    inicio = (query.get("inicio") or [None])[0]
+    fim = (query.get("fim") or [None])[0]
+    tipo = (query.get("tipo") or [None])[0]
+    status_pagamento = (query.get("status_pagamento") or [None])[0]
+
+    if not inicio and not fim:
+        hoje_dt = datetime.now()
+        primeiro_dia_mes_atual = hoje_dt.replace(day=1)
+        inicio_dt = (primeiro_dia_mes_atual - timedelta(days=335)).replace(day=1)
+        inicio = inicio_dt.strftime("%Y-%m-%d")
+        fim = hoje_dt.strftime("%Y-%m-%d")
+
+    inicio_completo = f"{inicio}T00:00:00" if inicio else "0000-00-00"
+    fim_completo = f"{fim}T23:59:59" if fim else "9999-99-99"
+
+    condicoes = ["data_hora >= ?", "data_hora <= ?"]
+    valores = [inicio_completo, fim_completo]
+    if tipo:
+        condicoes.append("tipo = ?")
+        valores.append(tipo)
+    if status_pagamento:
+        condicoes.append("status_pagamento = ?")
+        valores.append(status_pagamento)
+    where_sql = " AND ".join(condicoes)
+
+    eventos = [dict(r) for r in conn.execute(
+        f"""SELECT agenda_eventos.*, gestantes.nome AS gestante_nome FROM agenda_eventos
+            LEFT JOIN gestantes ON gestantes.id = agenda_eventos.gestante_id
+            WHERE {where_sql} ORDER BY data_hora DESC""",
+        tuple(valores),
+    )]
+    conn.close()
+
+    por_mes = {}
+    for e in eventos:
+        data_hora = e.get("data_hora") or ""
+        if len(data_hora) < 7:
+            continue
+        mes = data_hora[:7]
+        d = por_mes.setdefault(mes, {"mes": mes, "pago": 0.0, "pendente": 0.0, "qtd_pago": 0, "qtd_pendente": 0, "qtd_total": 0})
+        d["qtd_total"] += 1
+        v = e.get("valor") or 0
+        if e.get("status_pagamento") == "pago":
+            d["pago"] += v
+            d["qtd_pago"] += 1
+        elif e.get("status_pagamento") == "pendente":
+            d["pendente"] += v
+            d["qtd_pendente"] += 1
+
+    por_mes_lista = sorted(por_mes.values(), key=lambda x: x["mes"], reverse=True)
+    total_pago = sum(d["pago"] for d in por_mes_lista)
+    total_pendente = sum(d["pendente"] for d in por_mes_lista)
+
+    return 200, {
+        "eventos": eventos,
+        "por_mes": por_mes_lista,
+        "resumo": {
+            "total_pago": total_pago,
+            "total_pendente": total_pendente,
+            "total_geral": total_pago + total_pendente,
+            "qtd": len(eventos),
+        },
+    }
+
+
 @route("GET", "/api/dashboard")
 def dashboard(handler, params, body, query):
     conn = get_db()
