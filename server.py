@@ -2177,10 +2177,10 @@ def relatorios(handler, params, body, query):
     }
 
 
-@route("GET", "/api/faturamento")
-def faturamento(handler, params, body, query):
-    """Faturamento com filtros de período, tipo de consulta e status de
-    pagamento. Sem filtro de período, olha os últimos 12 meses por padrão."""
+def _calcular_faturamento(query):
+    """Monta o filtro de faturamento (período, tipo, status de pagamento) e
+    devolve eventos + agregados por mês + resumo. Usado tanto pelo endpoint
+    JSON (/api/faturamento) quanto pela versão para impressão."""
     conn = get_db()
     inicio = (query.get("inicio") or [None])[0]
     fim = (query.get("fim") or [None])[0]
@@ -2235,7 +2235,11 @@ def faturamento(handler, params, body, query):
     total_pago = sum(d["pago"] for d in por_mes_lista)
     total_pendente = sum(d["pendente"] for d in por_mes_lista)
 
-    return 200, {
+    return {
+        "inicio": inicio,
+        "fim": fim,
+        "tipo": tipo,
+        "status_pagamento": status_pagamento,
         "eventos": eventos,
         "por_mes": por_mes_lista,
         "resumo": {
@@ -2245,6 +2249,83 @@ def faturamento(handler, params, body, query):
             "qtd": len(eventos),
         },
     }
+
+
+@route("GET", "/api/faturamento")
+def faturamento(handler, params, body, query):
+    """Faturamento com filtros de período, tipo de consulta e status de
+    pagamento. Sem filtro de período, olha os últimos 12 meses por padrão."""
+    dados = _calcular_faturamento(query)
+    dados.pop("inicio", None)
+    dados.pop("fim", None)
+    dados.pop("tipo", None)
+    dados.pop("status_pagamento", None)
+    return 200, dados
+
+
+_MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+             "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+@route_html("GET", "/api/faturamento/imprimir")
+def imprimir_faturamento(handler, params, body, query):
+    d = _calcular_faturamento(query)
+    fmt_moeda = lambda v: f'R$ {v:,.2f}'.replace(",", "_").replace(".", ",").replace("_", ".")
+
+    filtros_txt = []
+    if d["inicio"] and d["fim"]:
+        filtros_txt.append(f'Período: {_fmt_data_br(d["inicio"])} a {_fmt_data_br(d["fim"])}')
+    if d["tipo"]:
+        filtros_txt.append(f'Tipo de consulta: {d["tipo"]}')
+    if d["status_pagamento"]:
+        filtros_txt.append(f'Status de pagamento: {d["status_pagamento"]}')
+    filtros_html = " · ".join(filtros_txt) if filtros_txt else "Todos os atendimentos"
+
+    linhas_mes = "".join(
+        f"<tr><td>{_MESES_PT[int(m['mes'][5:7]) - 1].capitalize()}/{m['mes'][:4]}</td>"
+        f"<td>{fmt_moeda(m['pago'])}</td><td>{fmt_moeda(m['pendente'])}</td>"
+        f"<td>{fmt_moeda(m['pago'] + m['pendente'])}</td><td>{m['qtd_total']}</td></tr>"
+        for m in d["por_mes"]
+    ) or '<tr><td colspan="5" style="text-align:center;color:#999;">Nenhum atendimento no período.</td></tr>'
+
+    linhas_evento = "".join(
+        f"<tr><td>{_fmt_data_br((e.get('data_hora') or '').split('T')[0])}</td>"
+        f"<td>{e.get('gestante_nome') or '—'}</td><td>{(e.get('tipo') or '—').capitalize()}</td>"
+        f"<td>{fmt_moeda(e['valor']) if e.get('valor') is not None else '—'}</td>"
+        f"<td>{ {'pago': 'Pago', 'pendente': 'Pendente'}.get(e.get('status_pagamento'), '—') }</td></tr>"
+        for e in d["eventos"]
+    ) or '<tr><td colspan="5" style="text-align:center;color:#999;">Nenhum atendimento no período.</td></tr>'
+
+    corpo = f"""
+    <h2 class="doc-title">Relatório de Faturamento</h2>
+    <div class="row" style="margin-bottom:14px;">
+      {_campo("Filtros aplicados", filtros_html)}
+    </div>
+    <div class="section">
+      <div class="section-title">Resumo</div>
+      <div class="row">
+        {_campo("Recebido no período", fmt_moeda(d["resumo"]["total_pago"]))}
+        {_campo("A receber (pendente)", fmt_moeda(d["resumo"]["total_pendente"]))}
+        {_campo("Total geral", fmt_moeda(d["resumo"]["total_geral"]))}
+        {_campo("Atendimentos", d["resumo"]["qtd"])}
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Faturamento por mês</div>
+      <table>
+        <thead><tr><th>Mês</th><th>Recebido</th><th>Pendente</th><th>Total</th><th>Atendimentos</th></tr></thead>
+        <tbody>{linhas_mes}</tbody>
+      </table>
+    </div>
+    <div class="section">
+      <div class="section-title">Atendimentos no período</div>
+      <table>
+        <thead><tr><th>Data</th><th>Paciente</th><th>Tipo</th><th>Valor</th><th>Status</th></tr></thead>
+        <tbody>{linhas_evento}</tbody>
+      </table>
+    </div>
+    """
+    return 200, _print_shell("Relatório de Faturamento", corpo)
 
 
 @route("GET", "/api/dashboard")

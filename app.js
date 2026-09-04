@@ -1539,6 +1539,16 @@ function FaturamentoPage({ onOpenGestante }) {
   const setFiltro = (k, v) => setFiltros((f) => ({ ...f, [k]: v }));
   const limparFiltros = () => setFiltros({ inicio: isoDia(dozeAtras), fim: isoDia(hoje), tipo: "", status_pagamento: "" });
 
+  const queryStringFiltros = () => {
+    const qs = new URLSearchParams();
+    if (filtros.inicio) qs.set("inicio", filtros.inicio);
+    if (filtros.fim) qs.set("fim", filtros.fim);
+    if (filtros.tipo) qs.set("tipo", filtros.tipo);
+    if (filtros.status_pagamento) qs.set("status_pagamento", filtros.status_pagamento);
+    return qs.toString();
+  };
+  const imprimir = () => window.open(printUrl(`/faturamento/imprimir?${queryStringFiltros()}`), "_blank");
+
   const fmtMoeda = (v) => `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`;
   const fmtMes = (mes) => {
     const [ano, m] = mes.split("-");
@@ -1554,7 +1564,8 @@ function FaturamentoPage({ onOpenGestante }) {
         React.createElement("div", null,
           React.createElement("h2", null, "Faturamento"),
           React.createElement("div", { className: "sub" }, "Receita por mês, com filtro de período, tipo de consulta e status de pagamento")
-        )
+        ),
+        React.createElement("button", { className: "btn btn-secondary", onClick: imprimir }, "🖨️ Imprimir")
       ),
       React.createElement("div", { className: "card", style: { marginBottom: 16 } },
         React.createElement("div", { className: "form-grid cols-3" },
